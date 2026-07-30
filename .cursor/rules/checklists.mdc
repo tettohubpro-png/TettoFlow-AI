@@ -1,0 +1,47 @@
+---
+description: Checklists TettoFlow AI OS
+alwaysApply: false
+---
+
+# Checklists — TettoFlow AI OS
+
+## Antes de implementar um módulo
+
+- [ ] ADR-001 aprovado
+- [ ] ADR-002 aprovado
+- [ ] Doc técnica em `DOCUMENTATION/05-MODULES/<modulo>.md` escrita
+- [ ] Aprovação explícita de Mairo na documentação
+- [ ] Casos de teste definidos na doc
+
+## Antes de cada PR/commit de módulo
+
+- [ ] Apenas um módulo alterado
+- [ ] Migration versionada (se houver schema)
+- [ ] RLS aplicada (se houver tabela nova)
+- [ ] Testes de regras de negócio passando
+- [ ] Doc do módulo atualizada
+- [ ] Nenhum secret commitado
+
+## Antes de deploy
+
+- [ ] Testes de isolamento cross-client (ADR-001)
+- [ ] Testes de filtro RAG (ADR-002)
+- [ ] Testes de handoff por segmento (Regra 3)
+- [ ] Variáveis de ambiente documentadas
+- [ ] Logs de auditoria funcionando
+
+## Checklist WhatsApp IA (Fase 0)
+
+- [ ] Segmento do cliente lido do CRM
+- [ ] Handoff em jurídico/saúde/eleitoral
+- [ ] Log em `ai_interaction_logs`
+- [ ] RAG filtrado por `client_id` da conversa
+- [ ] Evolution API webhook seguro
+
+## Checklist Auth (Fase 0)
+
+- [ ] Supabase Auth configurado
+- [ ] Roles: owner, team, client
+- [ ] Tags de função para team
+- [ ] JWT claims com client_ids permitidos
+- [ ] RLS em profiles/memberships

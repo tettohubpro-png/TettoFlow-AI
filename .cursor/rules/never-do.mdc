@@ -1,0 +1,18 @@
+---
+description: Proibições absolutas TettoFlow AI OS
+alwaysApply: true
+---
+
+# Never Do — TettoFlow AI OS
+
+- **Nunca** implementar módulos de fases diferentes no mesmo ciclo
+- **Nunca** escrever código de produção antes de ADR-001 e ADR-002 aprovados
+- **Nunca** implementar dois módulos no mesmo commit
+- **Nunca** criar tabela sem `client_id` (quando aplicável) e RLS
+- **Nunca** usar service role em Edge Function sem auditoria explícita
+- **Nunca** montar prompt de IA sem filtro de permissão (ADR-002)
+- **Nunca** deixar IA responder autonomamente em: aconselhamento jurídico, promessa de resultado saúde, propaganda eleitoral
+- **Nunca** introduzir Next.js, OpenAI (LLM), ou dependência fora da stack sem ADR
+- **Nunca** alterar schema Supabase manualmente — só via migration
+- **Nunca** pular documentação técnica do módulo antes de implementar
+- **Nunca** assumir decisão de arquitetura — ADRs são do owner

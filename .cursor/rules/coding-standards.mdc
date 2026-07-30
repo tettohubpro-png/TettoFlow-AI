@@ -1,0 +1,18 @@
+---
+description: Padrões de código TettoFlow AI OS
+globs: "**/*.{ts,tsx,sql}"
+alwaysApply: false
+---
+
+# Coding Standards — TettoFlow AI OS
+
+- Sempre **TypeScript**, nunca JavaScript puro
+- Nenhum componente acima de **300 linhas** — quebrar em subcomponentes
+- Nenhum código duplicado — extrair em hooks/utils compartilhados
+- Toda tabela nova exige **migration versionada** em `supabase/migrations/`
+- Toda função de IA que acessa dados de cliente deve passar pelo **filtro ADR-002**
+- Testes obrigatórios para: pipeline de status, permissões RBAC, handoff de IA
+- Atualizar doc do módulo ao final da implementação
+- **Um módulo por commit** — nunca misturar auth + crm no mesmo commit
+- Edge Functions: preferir sessão autenticada (`auth.uid()`) sobre service role
+- RLS deny-by-default em toda tabela com `client_id`

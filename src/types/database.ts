@@ -1,99 +1,264 @@
-export type UserRole = 'owner' | 'team' | 'client'
-export type ClientSegment = 'legal' | 'health_aesthetics' | 'electoral' | 'general'
-export type ClientStatus = 'active' | 'paused' | 'churned' | 'prospect'
-export type ProjectStatus =
-  | 'briefing'
-  | 'production'
-  | 'approval'
-  | 'correction'
-  | 'delivery'
-  | 'completed'
+// Tipos alinhados ao schema Supabase remoto (workspace-centric)
 
-export interface Profile {
+export type MembershipRole = 'OWNER' | 'ADMIN' | 'MANAGER' | 'MEMBER' | 'CLIENT'
+export type ClientStatus = 'ACTIVE' | 'INACTIVE' | 'ARCHIVED'
+export type OperationStatus =
+  | 'DRAFT'
+  | 'SUBMITTED'
+  | 'ANALYSIS'
+  | 'PRODUCTION'
+  | 'REVIEW'
+  | 'CLIENT'
+  | 'APPROVED'
+  | 'PUBLISHED'
+  | 'DONE'
+export type OperationPriority = 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL'
+/** Segmento regulatório para compliance de IA (WhatsApp) */
+export type ClientSegment = 'legal' | 'health_aesthetics' | 'electoral' | 'general'
+
+export interface AppUser {
   id: string
-  full_name: string
-  role: UserRole
-  client_id: string | null
-  function_tags: string[]
-  max_sensitivity: string
+  name: string
+  email: string
+  avatar_url: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface Workspace {
+  id: string
+  name: string
+  logo_url: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface Membership {
+  id: string
+  workspace_id: string
+  user_id: string
+  role: MembershipRole
+  created_at: string
+  updated_at: string
 }
 
 export interface Client {
   id: string
+  workspace_id: string
   name: string
-  segment: ClientSegment
-  plan: string | null
-  monthly_fee: number
   status: ClientStatus
-  whatsapp_instance: string | null
-  notes: string | null
   created_at: string
   updated_at: string
+  archived_at: string | null
 }
 
-export interface Contact {
+export interface ClientContact {
   id: string
+  workspace_id: string
   client_id: string
   name: string
   email: string | null
   phone: string | null
-  role_label: string | null
   is_primary: boolean
-}
-
-export interface Project {
-  id: string
-  client_id: string
-  title: string
-  description: string | null
-  status: ProjectStatus
-  due_date: string | null
-  assigned_to: string | null
   created_at: string
   updated_at: string
+}
+
+export interface Operation {
+  id: string
+  workspace_id: string
+  client_id: string
+  template_id: string
+  title: string
+  status: OperationStatus
+  priority: OperationPriority
+  deadline: string | null
+  responsible_id: string | null
+  created_by: string | null
+  created_at: string
+  updated_at: string
+  archived_at: string | null
   clients?: { name: string }
 }
 
 export interface DashboardStats {
   activeClients: number
-  pendingTasks: number
+  pendingOperations: number
   pendingApprovals: number
   todayAgenda: number
 }
 
-export type Database = {
-  public: {
-    Tables: {
-      profiles: {
-        Row: Profile
-        Insert: Partial<Profile> & { id: string }
-        Update: Partial<Profile>
-      }
-      clients: {
-        Row: Client
-        Insert: Partial<Client> & { name: string }
-        Update: Partial<Client>
-      }
-      contacts: {
-        Row: Contact
-        Insert: Partial<Contact> & { client_id: string; name: string }
-        Update: Partial<Contact>
-      }
-      projects: {
-        Row: Project
-        Insert: Partial<Project> & { client_id: string; title: string }
-        Update: Partial<Project>
-      }
-      project_status_log: {
-        Row: Record<string, unknown>
-        Insert: {
-          project_id: string
-          from_status?: ProjectStatus
-          to_status: ProjectStatus
-          note?: string
-        }
-        Update: Record<string, unknown>
-      }
-    }
+/** @deprecated Use AppUser + Membership */
+export type UserRole = MembershipRole
+
+/** @deprecated Use AppUser */
+export interface Profile {
+  id: string
+  full_name: string
+  role: MembershipRole
+}
+
+export const DEFAULT_TEMPLATE_ID = '2e8a4766-ac69-438f-b916-ecfc79637d02'
+
+export const ONBOARDING_EVENT_KEY = 'client.onboarded'
+export const ONBOARDING_MARKER_TITLE = '__tettoflow_onboarding__'
+
+export type AutomationRunStatus = 'PENDING' | 'RUNNING' | 'SUCCEEDED' | 'FAILED' | 'REVERTED'
+export type MemoryCategory =
+  | 'PREFERENCES'
+  | 'HISTORY'
+  | 'BRIEFING'
+  | 'CONSTRAINTS'
+  | 'INSIGHTS'
+  | 'BRAND'
+
+export interface Automation {
+  id: string
+  workspace_id: string
+  name: string
+  event_key: string
+  active: boolean
+  config_json: Record<string, unknown> | null
+  created_at: string
+  updated_at: string
+}
+
+export interface AutomationRun {
+  id: string
+  workspace_id: string
+  automation_id: string
+  status: AutomationRunStatus
+  error: string | null
+  created_at: string
+  finished_at: string | null
+}
+
+export interface OnboardingResult {
+  alreadyDone: boolean
+  runId: string | null
+  operationsCreated: number
+  clientId: string
+  clientName: string
+}
+
+export type Department =
+  | 'social_media'
+  | 'design'
+  | 'videomaker'
+  | 'video_editor'
+  | 'general'
+
+export type ApprovalType = 'INTERNAL' | 'CLIENT'
+export type ApprovalStatus =
+  | 'PENDING'
+  | 'APPROVED'
+  | 'REJECTED'
+  | 'CHANGES_REQUESTED'
+  | 'CANCELLED'
+
+export interface Approval {
+  id: string
+  workspace_id: string
+  operation_id: string
+  type: ApprovalType
+  status: ApprovalStatus
+  requested_by: string | null
+  decided_by: string | null
+  decision_note: string | null
+  created_at: string
+  updated_at: string
+  operations?: {
+    title: string
+    status: OperationStatus
+    clients?: { name: string }
   }
 }
+
+export interface ApprovalRound {
+  id: string
+  workspace_id: string
+  approval_id: string
+  round_number: number
+  created_at: string
+}
+
+export interface ClientFile {
+  id: string
+  workspace_id: string
+  client_id: string
+  operation_id: string | null
+  name: string
+  storage_path: string
+  mime_type: string | null
+  created_by: string | null
+  created_at: string
+  updated_at: string
+  clients?: { name: string }
+}
+
+export interface ClientAiMemory {
+  id: string
+  workspace_id: string
+  client_id: string
+  category: MemoryCategory
+  title: string
+  content: string
+  importance: number
+  active: boolean
+  created_by: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface AiChatMessage {
+  role: 'user' | 'assistant'
+  content: string
+  handoff?: boolean
+  contextSnippets?: string[]
+}
+
+export interface ClientBrand {
+  id: string
+  workspace_id: string
+  client_id: string
+  logo_url: string | null
+  primary_color: string | null
+  secondary_color: string | null
+  fonts: string | null
+  tone_of_voice: string | null
+  guidelines: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface ClientProduct {
+  id: string
+  workspace_id: string
+  client_id: string
+  name: string
+  description: string | null
+  active: boolean
+  created_at: string
+  updated_at: string
+}
+
+export interface BriefingFormData {
+  logo_url: string
+  primary_color: string
+  secondary_color: string
+  fonts: string
+  tone_of_voice: string
+  guidelines: string
+  history: string
+  objectives: string
+  persona: string
+  constraints: string
+  productsText: string
+}
+
+export const BRIEFING_MEMORY_TITLES = {
+  history: 'Briefing — História',
+  objectives: 'Briefing — Objetivos',
+  persona: 'Briefing — Persona',
+  constraints: 'Briefing — Restrições',
+} as const

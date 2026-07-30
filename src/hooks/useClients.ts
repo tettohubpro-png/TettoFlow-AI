@@ -1,17 +1,27 @@
 import { useCallback, useEffect, useState } from 'react'
 import { supabase } from '@/lib/supabase'
-import type { Client, Contact } from '@/types/database'
+import { useAuth } from '@/contexts/AuthContext'
+import type { Client, ClientContact, ClientStatus } from '@/types/database'
 
 export function useClients() {
+  const { workspace } = useAuth()
   const [clients, setClients] = useState<Client[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
   const fetchClients = useCallback(async () => {
+    if (!workspace?.id) {
+      setClients([])
+      setLoading(false)
+      return
+    }
+
     setLoading(true)
     const { data, error: err } = await supabase
       .from('clients')
       .select('*')
+      .eq('workspace_id', workspace.id)
+      .is('archived_at', null)
       .order('name')
 
     if (err) setError(err.message)
@@ -20,18 +30,25 @@ export function useClients() {
       setError(null)
     }
     setLoading(false)
-  }, [])
+  }, [workspace?.id])
 
   useEffect(() => {
     fetchClients()
   }, [fetchClients])
 
-  const createClient = async (payload: Partial<Client>) => {
+  const createClient = async (payload: { name: string; status?: ClientStatus }) => {
+    if (!workspace?.id) return { data: null, error: 'Workspace não carregado' }
+
     const { data, error: err } = await supabase
       .from('clients')
-      .insert(payload)
+      .insert({
+        name: payload.name,
+        status: payload.status ?? 'ACTIVE',
+        workspace_id: workspace.id,
+      })
       .select()
       .single()
+
     if (!err) await fetchClients()
     return { data, error: err?.message ?? null }
   }
@@ -46,15 +63,15 @@ export function useClients() {
 }
 
 export function useClientContacts(clientId: string | undefined) {
-  const [contacts, setContacts] = useState<Contact[]>([])
+  const [contacts, setContacts] = useState<ClientContact[]>([])
 
   useEffect(() => {
     if (!clientId) return
     supabase
-      .from('contacts')
+      .from('client_contacts')
       .select('*')
       .eq('client_id', clientId)
-      .then(({ data }) => setContacts((data ?? []) as Contact[]))
+      .then(({ data }) => setContacts((data ?? []) as ClientContact[]))
   }, [clientId])
 
   return { contacts }

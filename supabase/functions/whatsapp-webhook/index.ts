@@ -16,6 +16,14 @@ const LEGAL = [/processo/i, /advogad/i, /jurídic/i, /posso processar/i]
 const HEALTH = [/garante resultado/i, /cura /i, /emagrecer/i]
 const ELECTORAL = [/votem/i, /candidat/i, /elei[çc]/i]
 
+function inferSegment(memories: { content: string; title: string }[]): string {
+  const text = memories.map((m) => `${m.title} ${m.content}`).join(' ').toLowerCase()
+  if (/oab|jurídic|advogad/.test(text)) return 'legal'
+  if (/anvisa|estética|saúde|clínica/.test(text)) return 'health_aesthetics'
+  if (/eleição|tse|candidat/.test(text)) return 'electoral'
+  return 'general'
+}
+
 function needsHandoff(segment: string, text: string): { handoff: boolean; reason: string | null } {
   if (segment === 'legal' && LEGAL.some((p) => p.test(text))) {
     return { handoff: true, reason: 'Aconselhamento jurídico — OAB' }
@@ -27,6 +35,29 @@ function needsHandoff(segment: string, text: string): { handoff: boolean; reason
     return { handoff: true, reason: 'Propaganda eleitoral — TSE' }
   }
   return { handoff: false, reason: null }
+}
+
+function buildReply(
+  clientName: string,
+  message: string,
+  memories: { title: string; content: string; category: string }[],
+): string {
+  const terms = message.toLowerCase().split(/\s+/).filter((t) => t.length > 2)
+  const relevant = memories
+    .map((m) => {
+      const text = `${m.title} ${m.content}`.toLowerCase()
+      const score = terms.reduce((s, t) => s + (text.includes(t) ? 1 : 0), 0)
+      return { m, score }
+    })
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 2)
+
+  if (relevant[0]?.score > 0) {
+    const excerpt = relevant[0].m.content.slice(0, 200)
+    return `Olá! Sou o assistente da ${clientName}. ${excerpt}${excerpt.length >= 200 ? '...' : ''} Como posso ajudar?`
+  }
+
+  return `Olá! Sou o assistente da ${clientName}. Como posso ajudar você hoje?`
 }
 
 Deno.serve(async (req) => {
@@ -43,7 +74,7 @@ Deno.serve(async (req) => {
 
     const { data: client } = await supabase
       .from('clients')
-      .select('id, name, segment')
+      .select('id, name, workspace_id')
       .eq('id', payload.client_id)
       .single()
 
@@ -54,74 +85,37 @@ Deno.serve(async (req) => {
       })
     }
 
-    const { handoff, reason } = needsHandoff(client.segment, payload.message)
-
-    let conversationId: string | null = null
-    const { data: conv } = await supabase
-      .from('conversations')
-      .select('id')
+    const { data: memories } = await supabase
+      .from('client_ai_memory')
+      .select('title, content, category')
       .eq('client_id', payload.client_id)
-      .eq('contact_phone', payload.phone)
-      .eq('channel', 'whatsapp')
-      .maybeSingle()
+      .eq('active', true)
+      .order('importance', { ascending: false })
+      .limit(10)
 
-    if (conv) {
-      conversationId = conv.id
-    } else {
-      const { data: newConv } = await supabase
-        .from('conversations')
-        .insert({
-          client_id: payload.client_id,
-          channel: 'whatsapp',
-          contact_phone: payload.phone,
-          contact_name: payload.contact_name,
-          handoff_required: handoff,
-        })
-        .select('id')
-        .single()
-      conversationId = newConv?.id ?? null
-    }
-
-    await supabase.from('conversation_messages').insert({
-      conversation_id: conversationId,
-      client_id: payload.client_id,
-      direction: 'inbound',
-      content: payload.message,
-      is_ai: false,
-    })
+    const segment = inferSegment(memories ?? [])
+    const { handoff, reason } = needsHandoff(segment, payload.message)
 
     let reply = ''
     if (handoff) {
       reply =
         'Recebi sua mensagem. Um atendente da equipe TettoHub vai continuar o atendimento em breve.'
-      await supabase
-        .from('conversations')
-        .update({ handoff_required: true, status: 'handoff' })
-        .eq('id', conversationId)
     } else {
-      reply = `Olá! Sou o assistente da ${client.name}. Como posso ajudar?`
+      reply = buildReply(client.name, payload.message, memories ?? [])
     }
 
-    await supabase.from('conversation_messages').insert({
-      conversation_id: conversationId,
+    await supabase.from('client_ai_memory').insert({
+      workspace_id: client.workspace_id,
       client_id: payload.client_id,
-      direction: 'outbound',
-      content: reply,
-      is_ai: true,
-    })
-
-    await supabase.from('ai_interaction_logs').insert({
-      client_id: payload.client_id,
-      channel: 'whatsapp',
-      conversation_id: conversationId,
-      segment: client.segment,
-      handoff,
-      handoff_reason: reason,
-      model_used: handoff ? null : 'claude-placeholder',
+      category: 'HISTORY',
+      title: `WhatsApp ${payload.phone} — ${new Date().toISOString()}`,
+      content: `De: ${payload.contact_name ?? payload.phone}\nMensagem: ${payload.message}\nResposta: ${reply}${handoff ? `\nHandoff: ${reason}` : ''}`,
+      importance: 2,
+      active: true,
     })
 
     return new Response(
-      JSON.stringify({ reply, handoff, handoff_reason: reason }),
+      JSON.stringify({ reply, handoff, handoff_reason: reason, segment }),
       { headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
     )
   } catch (err) {

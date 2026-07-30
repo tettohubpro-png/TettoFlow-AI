@@ -9,16 +9,19 @@ import {
 } from 'react'
 import type { Session, User } from '@supabase/supabase-js'
 import { supabase } from '@/lib/supabase'
-import type { Profile } from '@/types/database'
+import type { AppUser, Membership, MembershipRole, Workspace } from '@/types/database'
 
 interface AuthContextValue {
   user: User | null
   session: Session | null
-  profile: Profile | null
+  appUser: AppUser | null
+  membership: Membership | null
+  workspace: Workspace | null
+  role: MembershipRole | null
   loading: boolean
   signIn: (email: string, password: string) => Promise<{ error: string | null }>
   signOut: () => Promise<void>
-  refreshProfile: () => Promise<void>
+  refreshSession: () => Promise<void>
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null)
@@ -26,34 +29,77 @@ const AuthContext = createContext<AuthContextValue | null>(null)
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null)
   const [session, setSession] = useState<Session | null>(null)
-  const [profile, setProfile] = useState<Profile | null>(null)
+  const [appUser, setAppUser] = useState<AppUser | null>(null)
+  const [membership, setMembership] = useState<Membership | null>(null)
+  const [workspace, setWorkspace] = useState<Workspace | null>(null)
   const [loading, setLoading] = useState(true)
 
-  const loadProfile = useCallback(async (userId: string) => {
-    const { data, error } = await supabase
-      .from('profiles')
+  const loadAppContext = useCallback(async (userId: string) => {
+    const { data: userRow, error: userErr } = await supabase
+      .from('users')
       .select('*')
       .eq('id', userId)
-      .single()
+      .maybeSingle()
 
-    if (error) {
-      console.error('Erro ao carregar profile:', error.message)
-      setProfile(null)
+    if (userErr) {
+      console.error('Erro ao carregar users:', userErr.message)
+      setAppUser(null)
+      setMembership(null)
+      setWorkspace(null)
       return
     }
-    setProfile(data as Profile)
+
+    if (!userRow) {
+      setAppUser(null)
+      setMembership(null)
+      setWorkspace(null)
+      return
+    }
+
+    setAppUser(userRow as AppUser)
+
+    const { data: membershipRow, error: memErr } = await supabase
+      .from('memberships')
+      .select('*')
+      .eq('user_id', userId)
+      .order('created_at', { ascending: true })
+      .limit(1)
+      .maybeSingle()
+
+    if (memErr || !membershipRow) {
+      console.error('Erro ao carregar membership:', memErr?.message)
+      setMembership(null)
+      setWorkspace(null)
+      return
+    }
+
+    setMembership(membershipRow as Membership)
+
+    const { data: workspaceRow, error: wsErr } = await supabase
+      .from('workspaces')
+      .select('*')
+      .eq('id', membershipRow.workspace_id)
+      .single()
+
+    if (wsErr) {
+      console.error('Erro ao carregar workspace:', wsErr.message)
+      setWorkspace(null)
+      return
+    }
+
+    setWorkspace(workspaceRow as Workspace)
   }, [])
 
-  const refreshProfile = useCallback(async () => {
-    if (user) await loadProfile(user.id)
-  }, [user, loadProfile])
+  const refreshSession = useCallback(async () => {
+    if (user) await loadAppContext(user.id)
+  }, [user, loadAppContext])
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => {
       setSession(data.session)
       setUser(data.session?.user ?? null)
       if (data.session?.user) {
-        loadProfile(data.session.user.id).finally(() => setLoading(false))
+        loadAppContext(data.session.user.id).finally(() => setLoading(false))
       } else {
         setLoading(false)
       }
@@ -63,14 +109,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setSession(next)
       setUser(next?.user ?? null)
       if (next?.user) {
-        loadProfile(next.user.id)
+        loadAppContext(next.user.id)
       } else {
-        setProfile(null)
+        setAppUser(null)
+        setMembership(null)
+        setWorkspace(null)
       }
     })
 
     return () => sub.subscription.unsubscribe()
-  }, [loadProfile])
+  }, [loadAppContext])
 
   const signIn = useCallback(async (email: string, password: string) => {
     const { error } = await supabase.auth.signInWithPassword({ email, password })
@@ -79,12 +127,27 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const signOut = useCallback(async () => {
     await supabase.auth.signOut()
-    setProfile(null)
+    setAppUser(null)
+    setMembership(null)
+    setWorkspace(null)
   }, [])
 
+  const role = membership?.role ?? null
+
   const value = useMemo(
-    () => ({ user, session, profile, loading, signIn, signOut, refreshProfile }),
-    [user, session, profile, loading, signIn, signOut, refreshProfile],
+    () => ({
+      user,
+      session,
+      appUser,
+      membership,
+      workspace,
+      role,
+      loading,
+      signIn,
+      signOut,
+      refreshSession,
+    }),
+    [user, session, appUser, membership, workspace, role, loading, signIn, signOut, refreshSession],
   )
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>

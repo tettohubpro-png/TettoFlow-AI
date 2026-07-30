@@ -1,43 +1,60 @@
 import { useCallback, useEffect, useState } from 'react'
 import { supabase } from '@/lib/supabase'
+import { useAuth } from '@/contexts/AuthContext'
 import type { DashboardStats } from '@/types/database'
 
 export function useDashboardStats() {
+  const { workspace } = useAuth()
   const [stats, setStats] = useState<DashboardStats>({
     activeClients: 0,
-    pendingTasks: 0,
+    pendingOperations: 0,
     pendingApprovals: 0,
     todayAgenda: 0,
   })
   const [loading, setLoading] = useState(true)
 
   const fetchStats = useCallback(async () => {
-    setLoading(true)
+    if (!workspace?.id) {
+      setLoading(false)
+      return
+    }
 
-    const [clientsRes, projectsRes, approvalsRes, todayRes] = await Promise.all([
-      supabase.from('clients').select('id', { count: 'exact', head: true }).eq('status', 'active'),
+    setLoading(true)
+    const today = new Date().toISOString().slice(0, 10)
+
+    const [clientsRes, opsRes, reviewRes, todayRes] = await Promise.all([
       supabase
-        .from('projects')
+        .from('clients')
         .select('id', { count: 'exact', head: true })
-        .not('status', 'eq', 'completed'),
+        .eq('workspace_id', workspace.id)
+        .eq('status', 'ACTIVE'),
       supabase
-        .from('projects')
+        .from('operations')
         .select('id', { count: 'exact', head: true })
-        .eq('status', 'approval'),
+        .eq('workspace_id', workspace.id)
+        .not('status', 'eq', 'DONE')
+        .is('archived_at', null),
       supabase
-        .from('projects')
+        .from('operations')
         .select('id', { count: 'exact', head: true })
-        .eq('due_date', new Date().toISOString().slice(0, 10)),
+        .eq('workspace_id', workspace.id)
+        .eq('status', 'REVIEW'),
+      supabase
+        .from('operations')
+        .select('id', { count: 'exact', head: true })
+        .eq('workspace_id', workspace.id)
+        .gte('deadline', `${today}T00:00:00`)
+        .lte('deadline', `${today}T23:59:59`),
     ])
 
     setStats({
       activeClients: clientsRes.count ?? 0,
-      pendingTasks: projectsRes.count ?? 0,
-      pendingApprovals: approvalsRes.count ?? 0,
+      pendingOperations: opsRes.count ?? 0,
+      pendingApprovals: reviewRes.count ?? 0,
       todayAgenda: todayRes.count ?? 0,
     })
     setLoading(false)
-  }, [])
+  }, [workspace?.id])
 
   useEffect(() => {
     fetchStats()

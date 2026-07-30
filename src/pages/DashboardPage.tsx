@@ -1,33 +1,34 @@
 import { StatCard } from '@/components/ui/StatCard'
 import { useDashboardStats } from '@/hooks/useDashboard'
-import { useProjects } from '@/hooks/useProjects'
-import { PROJECT_STATUS_LABELS } from '@/utils/permissions'
+import { useOperations } from '@/hooks/useOperations'
+import { OPERATION_STATUS_LABELS } from '@/utils/permissions'
 
 export function DashboardPage() {
   const { stats, loading } = useDashboardStats()
-  const { projects } = useProjects()
+  const { operations } = useOperations()
 
-  const pendingApprovals = projects.filter((p) => p.status === 'approval')
-  const todayProjects = projects.filter(
-    (p) => p.due_date === new Date().toISOString().slice(0, 10),
+  const pendingReviews = operations.filter((op) => op.status === 'REVIEW')
+  const today = new Date().toISOString().slice(0, 10)
+  const todayOps = operations.filter(
+    (op) => op.deadline && op.deadline.startsWith(today),
   )
 
   return (
     <div>
-      <header className="mb-8">
-        <h2 className="text-2xl font-bold">Dashboard</h2>
-        <p className="text-slate-400">Visão geral da operação TettoHub</p>
+      <header className="mb-4 sm:mb-8">
+        <h2 className="text-xl font-bold sm:text-2xl">Dashboard</h2>
+        <p className="text-sm text-slate-400 sm:text-base">Visão geral da operação TettoHub</p>
       </header>
 
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+      <div className="grid grid-cols-2 gap-3 sm:gap-4 xl:grid-cols-4">
         <StatCard label="Clientes ativos" value={loading ? '—' : stats.activeClients} />
         <StatCard
-          label="Tarefas pendentes"
-          value={loading ? '—' : stats.pendingTasks}
+          label="Operações em andamento"
+          value={loading ? '—' : stats.pendingOperations}
           accent="text-amber-400"
         />
         <StatCard
-          label="Aprovações pendentes"
+          label="Em revisão"
           value={loading ? '—' : stats.pendingApprovals}
           accent="text-sky-400"
         />
@@ -38,39 +39,39 @@ export function DashboardPage() {
         />
       </div>
 
-      <div className="mt-8 grid gap-6 lg:grid-cols-2">
-        <section className="rounded-xl border border-slate-800 bg-slate-900/40 p-5">
-          <h3 className="font-semibold text-emerald-300">Aprovações pendentes</h3>
+      <div className="mt-6 grid gap-4 sm:mt-8 sm:gap-6 lg:grid-cols-2">
+        <section className="rounded-xl border border-slate-800 bg-slate-900/40 p-4 sm:p-5">
+          <h3 className="font-semibold text-emerald-300">Em revisão</h3>
           <ul className="mt-4 space-y-2">
-            {pendingApprovals.length === 0 && (
-              <li className="text-sm text-slate-500">Nenhuma aprovação pendente</li>
+            {pendingReviews.length === 0 && (
+              <li className="text-sm text-slate-500">Nenhuma operação em revisão</li>
             )}
-            {pendingApprovals.map((p) => (
+            {pendingReviews.map((op) => (
               <li
-                key={p.id}
-                className="flex justify-between rounded-lg bg-slate-950/60 px-3 py-2 text-sm"
+                key={op.id}
+                className="flex flex-col gap-1 rounded-lg bg-slate-950/60 px-3 py-2.5 text-sm sm:flex-row sm:justify-between"
               >
-                <span>{p.title}</span>
-                <span className="text-slate-500">{p.clients?.name}</span>
+                <span className="break-words">{op.title}</span>
+                <span className="shrink-0 text-slate-500">{op.clients?.name}</span>
               </li>
             ))}
           </ul>
         </section>
 
-        <section className="rounded-xl border border-slate-800 bg-slate-900/40 p-5">
+        <section className="rounded-xl border border-slate-800 bg-slate-900/40 p-4 sm:p-5">
           <h3 className="font-semibold text-violet-300">Agenda do dia</h3>
           <ul className="mt-4 space-y-2">
-            {todayProjects.length === 0 && (
+            {todayOps.length === 0 && (
               <li className="text-sm text-slate-500">Nada com prazo hoje</li>
             )}
-            {todayProjects.map((p) => (
+            {todayOps.map((op) => (
               <li
-                key={p.id}
-                className="flex justify-between rounded-lg bg-slate-950/60 px-3 py-2 text-sm"
+                key={op.id}
+                className="flex flex-col gap-1 rounded-lg bg-slate-950/60 px-3 py-2.5 text-sm sm:flex-row sm:justify-between"
               >
-                <span>{p.title}</span>
-                <span className="text-slate-500">
-                  {PROJECT_STATUS_LABELS[p.status]}
+                <span className="break-words">{op.title}</span>
+                <span className="shrink-0 text-slate-500">
+                  {OPERATION_STATUS_LABELS[op.status]}
                 </span>
               </li>
             ))}

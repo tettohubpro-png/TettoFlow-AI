@@ -1,0 +1,376 @@
+{
+  "name": "TettoFlow Agente WhatsApp Operacional",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "whatsapp-agent",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "wh-in",
+      "name": "1. Webhook Evolution",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [0, 300],
+      "webhookId": "tettoflow-whatsapp-agent"
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $input.first().json;\nconst data = body.data || body;\nconst key = data.key || {};\nconst msg = data.message || {};\n\nif (key.fromMe) {\n  return [{ json: { skip: true, reason: 'fromMe' } }];\n}\n\nconst remoteJid = key.remoteJid || data.remoteJid || '';\nconst phone = String(remoteJid).replace('@s.whatsapp.net','').replace('@g.us','').replace(/\\D/g,'');\nconst pushName = data.pushName || body.pushName || '';\n\nlet messageType = 'text';\nlet text = '';\nlet mediaMessage = null;\n\nif (msg.conversation) {\n  text = msg.conversation;\n} else if (msg.extendedTextMessage?.text) {\n  text = msg.extendedTextMessage.text;\n} else if (msg.audioMessage || msg.pttMessage) {\n  messageType = 'audio';\n  mediaMessage = msg.audioMessage || msg.pttMessage;\n  text = '';\n} else if (msg.imageMessage?.caption) {\n  text = msg.imageMessage.caption;\n  messageType = 'image';\n} else {\n  return [{ json: { skip: true, reason: 'unsupported_type' } }];\n}\n\nreturn [{\n  json: {\n    skip: false,\n    phone,\n    remoteJid,\n    contact_name: pushName,\n    messageType,\n    text,\n    mediaMessage,\n    instance: body.instance || $env.EVOLUTION_INSTANCE || 'tettohub',\n    messageId: key.id || null\n  }\n}];"
+      },
+      "id": "normalize",
+      "name": "2. Normalizar payload",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.skip }}",
+              "value2": false
+            }
+          ]
+        }
+      },
+      "id": "if-skip",
+      "name": "3. Processar?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { ok: true, skipped: true, reason: $json.reason || 'skip' } }}"
+      },
+      "id": "respond-skip",
+      "name": "3b. Responder skip",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [700, 120]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{ $json.messageType }}",
+              "operation": "equals",
+              "value2": "audio"
+            }
+          ]
+        }
+      },
+      "id": "if-audio",
+      "name": "4. É áudio?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [700, 360]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.EVOLUTION_BASE_URL }}/chat/getBase64FromMediaMessage/{{ $json.instance }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "apikey", "value": "={{ $env.EVOLUTION_API_KEY }}" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"message\": {\n    \"key\": {\n      \"remoteJid\": \"{{ $json.remoteJid }}\",\n      \"id\": \"{{ $json.messageId }}\"\n    }\n  },\n  \"convertToMp3\": true\n}",
+        "options": {}
+      },
+      "id": "get-audio",
+      "name": "5. Baixar áudio Evolution",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [940, 480]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.groq.com/openai/v1/audio/transcriptions",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "=Bearer {{ $env.GROQ_API_KEY }}" }
+          ]
+        },
+        "contentType": "multipart-form-data",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "parameterType": "formBinaryData",
+              "name": "file",
+              "inputDataFieldName": "data"
+            },
+            { "name": "model", "value": "whisper-large-v3" },
+            { "name": "language", "value": "pt" }
+          ]
+        },
+        "options": {}
+      },
+      "id": "whisper",
+      "name": "6. Transcrever Groq Whisper",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1180, 480],
+      "notes": "Se o nó de base64 não gerar binário automaticamente, use um Code node intermediário para converter base64→binary antes deste."
+    },
+    {
+      "parameters": {
+        "jsCode": "const prev = $('4. É áudio?').item.json;\nconst whisper = $input.first().json;\nconst text = whisper.text || whisper.transcription || '';\nreturn [{ json: { ...prev, text: text || '[áudio sem transcrição]', messageType: 'audio_transcribed' } }];"
+      },
+      "id": "merge-audio",
+      "name": "7. Mesclar texto do áudio",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1420, 480]
+    },
+    {
+      "parameters": {
+        "jsCode": "const item = $input.first().json;\nreturn [{ json: item }];"
+      },
+      "id": "pass-text",
+      "name": "5b. Seguir com texto",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [940, 280]
+    },
+    {
+      "parameters": {
+        "mode": "append"
+      },
+      "id": "merge-paths",
+      "name": "8. Unir texto/áudio",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [1640, 360]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.EVOLUTION_BASE_URL }}/chat/sendPresence/{{ $json.instance }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "apikey", "value": "={{ $env.EVOLUTION_API_KEY }}" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"number\": \"{{ $json.phone }}\",\n  \"presence\": \"composing\",\n  \"delay\": 4000\n}",
+        "options": {}
+      },
+      "id": "typing",
+      "name": "9. Digitando… (presence)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1880, 360],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.SUPABASE_URL }}/functions/v1/agent-whatsapp",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "=Bearer {{ $env.SUPABASE_ANON_KEY }}" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"phone\": \"{{ $('8. Unir texto/áudio').item.json.phone }}\",\n  \"message\": \"{{ $('8. Unir texto/áudio').item.json.text }}\",\n  \"contact_name\": \"{{ $('8. Unir texto/áudio').item.json.contact_name }}\",\n  \"instance\": \"{{ $('8. Unir texto/áudio').item.json.instance }}\"\n}",
+        "options": {}
+      },
+      "id": "agent",
+      "name": "10. Agente TettoFlow (Groq)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2120, 360]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.EVOLUTION_BASE_URL }}/chat/sendPresence/{{ $('8. Unir texto/áudio').item.json.instance }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "apikey", "value": "={{ $env.EVOLUTION_API_KEY }}" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"number\": \"{{ $('8. Unir texto/áudio').item.json.phone }}\",\n  \"presence\": \"paused\"\n}",
+        "options": {}
+      },
+      "id": "pause-typing",
+      "name": "11. Parar digitando",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2360, 360],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.EVOLUTION_BASE_URL }}/message/sendText/{{ $('8. Unir texto/áudio').item.json.instance }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "apikey", "value": "={{ $env.EVOLUTION_API_KEY }}" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"number\": \"{{ $('8. Unir texto/áudio').item.json.phone }}\",\n  \"text\": \"{{ $('10. Agente TettoFlow (Groq)').item.json.reply }}\"\n}",
+        "options": {}
+      },
+      "id": "send-text",
+      "name": "12. Enviar resposta WhatsApp",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2600, 360]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $('10. Agente TettoFlow (Groq)').item.json.create_operation }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "id": "if-op",
+      "name": "13. Criou operação?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [2840, 360]
+    },
+    {
+      "parameters": {
+        "jsCode": "const agent = $('10. Agente TettoFlow (Groq)').item.json;\nconst dept = agent.department_label || agent.department;\nreturn [{\n  json: {\n    notify_text: `🔔 Novo pedido WhatsApp\\nCliente: ${agent.client_name}\\nDept: ${dept}\\nIntent: ${agent.intent}\\nOp: ${agent.operation_id || '-'}\\nMsg: ${$('8. Unir texto/áudio').item.json.text}`\n  }\n}];"
+      },
+      "id": "notify-build",
+      "name": "14. Montar alerta interno",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [3080, 280]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.EVOLUTION_BASE_URL }}/message/sendText/{{ $('8. Unir texto/áudio').item.json.instance }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "apikey", "value": "={{ $env.EVOLUTION_API_KEY }}" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"number\": \"{{ $env.INTERNAL_ALERT_PHONE }}\",\n  \"text\": \"{{ $json.notify_text }}\"\n}",
+        "options": {}
+      },
+      "id": "notify-team",
+      "name": "15. Alertar equipe (WhatsApp interno)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [3320, 280],
+      "onError": "continueRegularOutput",
+      "notes": "Defina INTERNAL_ALERT_PHONE com o número do gestor/Social Media."
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $('10. Agente TettoFlow (Groq)').item.json }}"
+      },
+      "id": "respond-ok",
+      "name": "16. Responder webhook OK",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [3560, 360]
+    }
+  ],
+  "connections": {
+    "1. Webhook Evolution": {
+      "main": [[{ "node": "2. Normalizar payload", "type": "main", "index": 0 }]]
+    },
+    "2. Normalizar payload": {
+      "main": [[{ "node": "3. Processar?", "type": "main", "index": 0 }]]
+    },
+    "3. Processar?": {
+      "main": [
+        [{ "node": "4. É áudio?", "type": "main", "index": 0 }],
+        [{ "node": "3b. Responder skip", "type": "main", "index": 0 }]
+      ]
+    },
+    "4. É áudio?": {
+      "main": [
+        [{ "node": "5. Baixar áudio Evolution", "type": "main", "index": 0 }],
+        [{ "node": "5b. Seguir com texto", "type": "main", "index": 0 }]
+      ]
+    },
+    "5. Baixar áudio Evolution": {
+      "main": [[{ "node": "6. Transcrever Groq Whisper", "type": "main", "index": 0 }]]
+    },
+    "6. Transcrever Groq Whisper": {
+      "main": [[{ "node": "7. Mesclar texto do áudio", "type": "main", "index": 0 }]]
+    },
+    "7. Mesclar texto do áudio": {
+      "main": [[{ "node": "8. Unir texto/áudio", "type": "main", "index": 0 }]]
+    },
+    "5b. Seguir com texto": {
+      "main": [[{ "node": "8. Unir texto/áudio", "type": "main", "index": 1 }]]
+    },
+    "8. Unir texto/áudio": {
+      "main": [[{ "node": "9. Digitando… (presence)", "type": "main", "index": 0 }]]
+    },
+    "9. Digitando… (presence)": {
+      "main": [[{ "node": "10. Agente TettoFlow (Groq)", "type": "main", "index": 0 }]]
+    },
+    "10. Agente TettoFlow (Groq)": {
+      "main": [[{ "node": "11. Parar digitando", "type": "main", "index": 0 }]]
+    },
+    "11. Parar digitando": {
+      "main": [[{ "node": "12. Enviar resposta WhatsApp", "type": "main", "index": 0 }]]
+    },
+    "12. Enviar resposta WhatsApp": {
+      "main": [[{ "node": "13. Criou operação?", "type": "main", "index": 0 }]]
+    },
+    "13. Criou operação?": {
+      "main": [
+        [{ "node": "14. Montar alerta interno", "type": "main", "index": 0 }],
+        [{ "node": "16. Responder webhook OK", "type": "main", "index": 0 }]
+      ]
+    },
+    "14. Montar alerta interno": {
+      "main": [[{ "node": "15. Alertar equipe (WhatsApp interno)", "type": "main", "index": 0 }]]
+    },
+    "15. Alertar equipe (WhatsApp interno)": {
+      "main": [[{ "node": "16. Responder webhook OK", "type": "main", "index": 0 }]]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "pinData": {}
+}

@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import type { DragEvent } from 'react'
 import { OperationCard } from '@/components/operations/OperationCard'
 import { OperationModal } from '@/components/operations/OperationModal'
 import { useOperations, type OperationDetails } from '@/hooks/useOperations'
@@ -32,6 +33,9 @@ export function ProjectsPage() {
   const [editingDetails, setEditingDetails] = useState<OperationDetails | null>(null)
   const [loadingEdit, setLoadingEdit] = useState<string | null>(null)
   const [requestingId, setRequestingId] = useState<string | null>(null)
+  const [draggingId, setDraggingId] = useState<string | null>(null)
+  const [dragOverStatus, setDragOverStatus] = useState<string | null>(null)
+  const [movingId, setMovingId] = useState<string | null>(null)
 
   const handleCreate = async (form: OperationFormData, files: File[]) => {
     const { data, error } = await createOperation(form)
@@ -76,6 +80,29 @@ export function ProjectsPage() {
     await updateStatus(operationId, prev)
   }
 
+  const moveToStatus = async (operationId: string, toStatus: OperationStatus) => {
+    const op = operations.find((o) => o.id === operationId)
+    if (!op || op.status === toStatus) return
+    setMovingId(operationId)
+    await updateStatus(operationId, toStatus)
+    setMovingId(null)
+  }
+
+  const handleColumnDragOver = (e: DragEvent<HTMLDivElement>, status: string) => {
+    e.preventDefault()
+    e.dataTransfer.dropEffect = 'move'
+    if (dragOverStatus !== status) setDragOverStatus(status)
+  }
+
+  const handleColumnDrop = async (e: DragEvent<HTMLDivElement>, status: string) => {
+    e.preventDefault()
+    const operationId = e.dataTransfer.getData('application/x-operation-id')
+    setDragOverStatus(null)
+    setDraggingId(null)
+    if (!operationId) return
+    await moveToStatus(operationId, status as OperationStatus)
+  }
+
   const handleRequestApproval = async (operationId: string, type: 'INTERNAL' | 'CLIENT') => {
     setRequestingId(operationId)
     await requestApproval(operationId, type)
@@ -92,7 +119,9 @@ export function ProjectsPage() {
       <header className="mb-4 flex flex-col gap-3 sm:mb-6 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h2 className="text-xl font-bold sm:text-2xl">Operações</h2>
-          <p className="text-sm text-slate-400">Pipeline de produção</p>
+          <p className="text-sm text-slate-400">
+            Pipeline de produção — arraste os cards entre as colunas
+          </p>
         </div>
         <button
           type="button"
@@ -106,16 +135,36 @@ export function ProjectsPage() {
       {loading ? (
         <p className="text-slate-500">Carregando...</p>
       ) : (
-        <div className="-mx-3 flex gap-3 overflow-x-auto px-3 pb-2 sm:mx-0 sm:grid sm:grid-cols-2 sm:overflow-visible sm:px-0 lg:grid-cols-3 xl:grid-cols-5">
+        <div
+          className="-mx-3 flex gap-3 overflow-x-auto px-3 pb-2 sm:mx-0 sm:grid sm:grid-cols-2 sm:overflow-visible sm:px-0 lg:grid-cols-3 xl:grid-cols-5"
+          onDragEnd={() => {
+            setDraggingId(null)
+            setDragOverStatus(null)
+          }}
+        >
           {byStatus.map(({ status, items }) => (
             <div
               key={status}
-              className="w-[78vw] max-w-xs shrink-0 rounded-xl border border-slate-800 bg-slate-900/30 p-3 sm:w-auto sm:max-w-none"
+              onDragOver={(e) => handleColumnDragOver(e, status)}
+              onDragLeave={() => {
+                if (dragOverStatus === status) setDragOverStatus(null)
+              }}
+              onDrop={(e) => handleColumnDrop(e, status)}
+              className={`w-[78vw] max-w-xs shrink-0 rounded-xl border p-3 transition sm:w-auto sm:max-w-none ${
+                dragOverStatus === status
+                  ? 'border-sky-500 bg-sky-950/40 ring-2 ring-sky-500/30'
+                  : 'border-slate-800 bg-slate-900/30'
+              }`}
             >
               <h3 className="mb-3 text-xs font-semibold uppercase tracking-wide text-slate-400">
                 {OPERATION_STATUS_LABELS[status]} ({items.length})
               </h3>
-              <ul className="space-y-2">
+              <ul className="min-h-16 space-y-2">
+                {items.length === 0 && (
+                  <li className="rounded-lg border border-dashed border-slate-700 px-3 py-6 text-center text-xs text-slate-600">
+                    {dragOverStatus === status ? 'Solte aqui' : 'Arraste um card'}
+                  </li>
+                )}
                 {items.map((op) => {
                   const meta = cardMeta[op.id]
                   const prev = previousOperationStatus(op.status)
@@ -129,9 +178,15 @@ export function ProjectsPage() {
                       onAdvance={() => advance(op.id, op.status)}
                       onRevert={() => revert(op.id, op.status)}
                       onRequestApproval={(type) => handleRequestApproval(op.id, type)}
-                      requestingApproval={requestingId === op.id || loadingEdit === op.id}
+                      requestingApproval={
+                        requestingId === op.id ||
+                        loadingEdit === op.id ||
+                        movingId === op.id
+                      }
                       canRevert={!!prev && op.status !== 'DRAFT'}
                       canAdvance={op.status !== 'DONE'}
+                      isDragging={draggingId === op.id}
+                      onDragBegin={() => setDraggingId(op.id)}
                     />
                   )
                 })}

@@ -1,3 +1,4 @@
+import type { DragEvent } from 'react'
 import type { Operation } from '@/types/database'
 import type { OperationExtendedMeta } from '@/utils/operationExtras'
 import { OPERATION_STATUS_LABELS } from '@/utils/permissions'
@@ -13,6 +14,8 @@ interface OperationCardProps {
   requestingApproval: boolean
   canRevert: boolean
   canAdvance: boolean
+  isDragging?: boolean
+  onDragBegin?: () => void
 }
 
 function formatShortDate(iso: string | null | undefined): string | null {
@@ -33,12 +36,34 @@ export function OperationCard({
   requestingApproval,
   canRevert,
   canAdvance,
+  isDragging,
+  onDragBegin,
 }: OperationCardProps) {
   const deadlineLabel = formatShortDate(operation.deadline)
   const status = operation.status
 
+  const handleDragStart = (e: DragEvent<HTMLLIElement>) => {
+    e.dataTransfer.setData('application/x-operation-id', operation.id)
+    e.dataTransfer.setData('application/x-operation-status', operation.status)
+    e.dataTransfer.effectAllowed = 'move'
+    onDragBegin?.()
+  }
+
   return (
-    <li className="group relative rounded-lg border border-slate-800 bg-slate-950 p-3 text-sm transition hover:border-sky-500/40">
+    <li
+      draggable
+      onDragStart={handleDragStart}
+      className={`group relative cursor-grab rounded-lg border border-slate-800 bg-slate-950 p-3 text-sm transition active:cursor-grabbing hover:border-sky-500/40 ${
+        isDragging ? 'opacity-40 ring-2 ring-sky-500/50' : ''
+      }`}
+    >
+      <div className="mb-1 flex items-center gap-2 text-slate-600">
+        <span className="select-none text-xs tracking-widest" aria-hidden>
+          ⠿
+        </span>
+        <span className="text-[10px] uppercase">Arrastar</span>
+      </div>
+
       {meta?.labels?.[0] && (
         <span
           className="mb-2 block h-1.5 w-10 rounded-full"
@@ -49,6 +74,7 @@ export function OperationCard({
       <button
         type="button"
         onClick={onEdit}
+        onMouseDown={(e) => e.stopPropagation()}
         className="absolute right-2 top-2 rounded-full bg-slate-800/90 p-1.5 text-slate-300 opacity-0 transition group-hover:opacity-100 hover:bg-slate-700 hover:text-white"
         aria-label="Editar solicitação"
         title="Editar"
@@ -96,7 +122,11 @@ export function OperationCard({
         </div>
       )}
 
-      <div className="mt-2 flex flex-wrap gap-2">
+      <div
+        className="mt-2 flex flex-wrap gap-2"
+        onMouseDown={(e) => e.stopPropagation()}
+        onDragStart={(e) => e.preventDefault()}
+      >
         {canRevert && (
           <button
             type="button"

@@ -70,14 +70,17 @@ export interface Operation {
   client_id: string
   template_id: string
   title: string
+  description: string | null
   status: OperationStatus
   priority: OperationPriority
+  start_date: string | null
   deadline: string | null
   responsible_id: string | null
   created_by: string | null
   created_at: string
   updated_at: string
   archived_at: string | null
+  metadata: Record<string, unknown> | null
   clients?: { name: string }
 }
 

@@ -65,6 +65,14 @@ export function nextOperationStatus(current: string): string | null {
   return OPERATION_STATUS_ORDER[idx + 1]
 }
 
+export function previousOperationStatus(current: string): string | null {
+  const idx = OPERATION_STATUS_ORDER.indexOf(
+    current as (typeof OPERATION_STATUS_ORDER)[number],
+  )
+  if (idx <= 0) return null
+  return OPERATION_STATUS_ORDER[idx - 1]
+}
+
 export const APPROVAL_STATUS_LABELS: Record<string, string> = {
   PENDING: 'Pendente',
   APPROVED: 'Aprovado',
@@ -99,3 +107,4 @@ export function canUploadRecordings(role: MembershipRole | undefined): boolean {
 export const PROJECT_STATUS_LABELS = OPERATION_STATUS_LABELS
 export const PROJECT_STATUS_ORDER = OPERATION_STATUS_ORDER
 export const nextProjectStatus = nextOperationStatus
+export const previousProjectStatus = previousOperationStatus

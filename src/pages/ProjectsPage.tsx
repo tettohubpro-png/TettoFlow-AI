@@ -1,29 +1,66 @@
 import { useState } from 'react'
-import type { FormEvent } from 'react'
-import { useOperations } from '@/hooks/useOperations'
+import { OperationCard } from '@/components/operations/OperationCard'
+import { OperationModal } from '@/components/operations/OperationModal'
+import { useOperations, type OperationDetails } from '@/hooks/useOperations'
 import { useClients } from '@/hooks/useClients'
 import { useApprovals } from '@/hooks/useApprovals'
 import {
   OPERATION_STATUS_LABELS,
   OPERATION_STATUS_ORDER,
   nextOperationStatus,
+  previousOperationStatus,
 } from '@/utils/permissions'
+import type { OperationFormData } from '@/utils/operationExtras'
 import type { OperationStatus } from '@/types/database'
 
 export function ProjectsPage() {
-  const { operations, loading, createOperation, updateStatus } = useOperations()
+  const {
+    operations,
+    cardMeta,
+    loading,
+    createOperation,
+    updateOperation,
+    attachFiles,
+    updateStatus,
+    loadOperationDetails,
+  } = useOperations()
   const { clients } = useClients()
   const { requestApproval } = useApprovals()
-  const [showForm, setShowForm] = useState(false)
-  const [form, setForm] = useState({ client_id: '', title: '' })
+
+  const [createOpen, setCreateOpen] = useState(false)
+  const [editOpen, setEditOpen] = useState(false)
+  const [editingDetails, setEditingDetails] = useState<OperationDetails | null>(null)
+  const [loadingEdit, setLoadingEdit] = useState<string | null>(null)
   const [requestingId, setRequestingId] = useState<string | null>(null)
 
-  const handleCreate = async (e: FormEvent) => {
-    e.preventDefault()
-    const { error } = await createOperation(form)
-    if (!error) {
-      setShowForm(false)
-      setForm({ client_id: '', title: '' })
+  const handleCreate = async (form: OperationFormData, files: File[]) => {
+    const { data, error } = await createOperation(form)
+    if (error || !data) return { error: error ?? 'Erro ao criar' }
+    if (files.length > 0) {
+      const attach = await attachFiles(data.id, form.client_id, files)
+      if (attach.error) return attach
+    }
+    return { error: null }
+  }
+
+  const handleUpdate = async (form: OperationFormData, files: File[]) => {
+    if (!editingDetails) return { error: 'Operação não encontrada' }
+    const result = await updateOperation(editingDetails.id, form)
+    if (result.error) return result
+    if (files.length > 0) {
+      const attach = await attachFiles(editingDetails.id, editingDetails.client_id, files)
+      if (attach.error) return attach
+    }
+    return { error: null }
+  }
+
+  const openEdit = async (operationId: string) => {
+    setLoadingEdit(operationId)
+    const details = await loadOperationDetails(operationId)
+    setLoadingEdit(null)
+    if (details) {
+      setEditingDetails(details)
+      setEditOpen(true)
     }
   }
 
@@ -31,6 +68,12 @@ export function ProjectsPage() {
     const next = nextOperationStatus(current) as OperationStatus | null
     if (!next) return
     await updateStatus(operationId, next)
+  }
+
+  const revert = async (operationId: string, current: OperationStatus) => {
+    const prev = previousOperationStatus(current) as OperationStatus | null
+    if (!prev) return
+    await updateStatus(operationId, prev)
   }
 
   const handleRequestApproval = async (operationId: string, type: 'INTERNAL' | 'CLIENT') => {
@@ -53,46 +96,12 @@ export function ProjectsPage() {
         </div>
         <button
           type="button"
-          onClick={() => setShowForm(!showForm)}
+          onClick={() => setCreateOpen(true)}
           className="min-h-11 w-full rounded-lg bg-emerald-600 px-4 py-2.5 text-sm font-medium hover:bg-emerald-500 sm:w-auto"
         >
-          {showForm ? 'Cancelar' : 'Nova operação'}
+          Solicitação
         </button>
       </header>
-
-      {showForm && (
-        <form
-          onSubmit={handleCreate}
-          className="mb-6 grid gap-3 rounded-xl border border-slate-800 bg-slate-900/50 p-4 sm:grid-cols-2 sm:gap-4 sm:p-5"
-        >
-          <select
-            required
-            value={form.client_id}
-            onChange={(e) => setForm({ ...form, client_id: e.target.value })}
-            className="min-h-11 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2"
-          >
-            <option value="">Selecione o cliente</option>
-            {clients.map((c) => (
-              <option key={c.id} value={c.id}>
-                {c.name}
-              </option>
-            ))}
-          </select>
-          <input
-            required
-            placeholder="Título da operação"
-            value={form.title}
-            onChange={(e) => setForm({ ...form, title: e.target.value })}
-            className="min-h-11 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2"
-          />
-          <button
-            type="submit"
-            className="min-h-11 rounded-lg bg-emerald-600 py-2.5 sm:col-span-2"
-          >
-            Criar operação
-          </button>
-        </form>
-      )}
 
       {loading ? (
         <p className="text-slate-500">Carregando...</p>
@@ -107,51 +116,50 @@ export function ProjectsPage() {
                 {OPERATION_STATUS_LABELS[status]} ({items.length})
               </h3>
               <ul className="space-y-2">
-                {items.map((op) => (
-                  <li
-                    key={op.id}
-                    className="rounded-lg border border-slate-800 bg-slate-950 p-3 text-sm"
-                  >
-                    <p className="font-medium break-words">{op.title}</p>
-                    <p className="mt-1 text-xs text-slate-500">{op.clients?.name}</p>
-                    <div className="mt-2 flex flex-wrap gap-2">
-                      {status !== 'DONE' && (
-                        <button
-                          type="button"
-                          onClick={() => advance(op.id, op.status)}
-                          className="min-h-9 rounded-md bg-emerald-600/15 px-2.5 text-xs text-emerald-300"
-                        >
-                          Avançar →
-                        </button>
-                      )}
-                      {['PRODUCTION', 'REVIEW'].includes(status) && (
-                        <>
-                          <button
-                            type="button"
-                            disabled={requestingId === op.id}
-                            onClick={() => handleRequestApproval(op.id, 'INTERNAL')}
-                            className="min-h-9 rounded-md bg-sky-600/15 px-2.5 text-xs text-sky-300 disabled:opacity-50"
-                          >
-                            Aprov. interna
-                          </button>
-                          <button
-                            type="button"
-                            disabled={requestingId === op.id}
-                            onClick={() => handleRequestApproval(op.id, 'CLIENT')}
-                            className="min-h-9 rounded-md bg-violet-600/15 px-2.5 text-xs text-violet-300 disabled:opacity-50"
-                          >
-                            Aprov. cliente
-                          </button>
-                        </>
-                      )}
-                    </div>
-                  </li>
-                ))}
+                {items.map((op) => {
+                  const meta = cardMeta[op.id]
+                  const prev = previousOperationStatus(op.status)
+                  return (
+                    <OperationCard
+                      key={op.id}
+                      operation={op}
+                      meta={meta?.meta}
+                      hasDescription={meta?.hasDescription}
+                      onEdit={() => openEdit(op.id)}
+                      onAdvance={() => advance(op.id, op.status)}
+                      onRevert={() => revert(op.id, op.status)}
+                      onRequestApproval={(type) => handleRequestApproval(op.id, type)}
+                      requestingApproval={requestingId === op.id || loadingEdit === op.id}
+                      canRevert={!!prev && op.status !== 'DRAFT'}
+                      canAdvance={op.status !== 'DONE'}
+                    />
+                  )
+                })}
               </ul>
             </div>
           ))}
         </div>
       )}
+
+      <OperationModal
+        mode="create"
+        open={createOpen}
+        clients={clients}
+        onClose={() => setCreateOpen(false)}
+        onSubmit={handleCreate}
+      />
+
+      <OperationModal
+        mode="edit"
+        open={editOpen}
+        clients={clients}
+        initial={editingDetails}
+        onClose={() => {
+          setEditOpen(false)
+          setEditingDetails(null)
+        }}
+        onSubmit={handleUpdate}
+      />
     </div>
   )
 }

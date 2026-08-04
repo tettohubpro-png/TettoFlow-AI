@@ -4,7 +4,7 @@ import type { Department, Operation } from '@/types/database'
 import { classifyDepartment, DEPARTMENT_ORDER } from '@/utils/departments'
 
 export function useDepartmentQueue() {
-  const { operations, loading, updateStatus } = useOperations()
+  const { operations, loading, updateStatus, assignResponsible } = useOperations()
 
   const activeOps = useMemo(
     () => operations.filter((op) => op.status !== 'DONE' && !op.archived_at),
@@ -32,5 +32,5 @@ export function useDepartmentQueue() {
     [byDepartment],
   )
 
-  return { byDepartment, counts, loading, updateStatus }
+  return { byDepartment, counts, loading, updateStatus, assignResponsible }
 }

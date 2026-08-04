@@ -20,6 +20,7 @@ interface AuthContextValue {
   role: MembershipRole | null
   loading: boolean
   signIn: (email: string, password: string) => Promise<{ error: string | null }>
+  signInWithGoogle: () => Promise<{ error: string | null }>
   signOut: () => Promise<void>
   refreshSession: () => Promise<void>
 }
@@ -125,6 +126,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return { error: error?.message ?? null }
   }, [])
 
+  const signInWithGoogle = useCallback(async () => {
+    const { error } = await supabase.auth.signInWithOAuth({
+      provider: 'google',
+      options: {
+        redirectTo: `${window.location.origin}/`,
+        queryParams: {
+          access_type: 'offline',
+          prompt: 'consent',
+        },
+      },
+    })
+    return { error: error?.message ?? null }
+  }, [])
+
   const signOut = useCallback(async () => {
     await supabase.auth.signOut()
     setAppUser(null)
@@ -144,10 +159,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       role,
       loading,
       signIn,
+      signInWithGoogle,
       signOut,
       refreshSession,
     }),
-    [user, session, appUser, membership, workspace, role, loading, signIn, signOut, refreshSession],
+    [
+      user,
+      session,
+      appUser,
+      membership,
+      workspace,
+      role,
+      loading,
+      signIn,
+      signInWithGoogle,
+      signOut,
+      refreshSession,
+    ],
   )
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>

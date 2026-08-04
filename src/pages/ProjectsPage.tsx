@@ -5,9 +5,12 @@ import { OperationModal } from '@/components/operations/OperationModal'
 import { useOperations, type OperationDetails } from '@/hooks/useOperations'
 import { useClients } from '@/hooks/useClients'
 import { useApprovals } from '@/hooks/useApprovals'
+import { useAuth } from '@/contexts/AuthContext'
+import { useTeamMembers } from '@/hooks/useTeamMembers'
 import {
   OPERATION_STATUS_LABELS,
   OPERATION_STATUS_ORDER,
+  canDeleteOperations,
   nextOperationStatus,
   previousOperationStatus,
 } from '@/utils/permissions'
@@ -24,9 +27,13 @@ export function ProjectsPage() {
     attachFiles,
     updateStatus,
     loadOperationDetails,
+    archiveOperation,
   } = useOperations()
   const { clients } = useClients()
   const { requestApproval } = useApprovals()
+  const { role, appUser } = useAuth()
+  const { members } = useTeamMembers()
+  const canDelete = canDeleteOperations(role, appUser)
 
   const [createOpen, setCreateOpen] = useState(false)
   const [editOpen, setEditOpen] = useState(false)
@@ -168,6 +175,7 @@ export function ProjectsPage() {
                 {items.map((op) => {
                   const meta = cardMeta[op.id]
                   const prev = previousOperationStatus(op.status)
+                  const responsible = members.find((m) => m.user_id === op.responsible_id)
                   return (
                     <OperationCard
                       key={op.id}
@@ -178,6 +186,8 @@ export function ProjectsPage() {
                       onAdvance={() => advance(op.id, op.status)}
                       onRevert={() => revert(op.id, op.status)}
                       onRequestApproval={(type) => handleRequestApproval(op.id, type)}
+                      onDelete={() => archiveOperation(op.id)}
+                      canDelete={canDelete}
                       requestingApproval={
                         requestingId === op.id ||
                         loadingEdit === op.id ||
@@ -187,6 +197,7 @@ export function ProjectsPage() {
                       canAdvance={op.status !== 'DONE'}
                       isDragging={draggingId === op.id}
                       onDragBegin={() => setDraggingId(op.id)}
+                      responsibleName={responsible?.user.name}
                     />
                   )
                 })}

@@ -9,6 +9,7 @@ import {
   type OperationExtendedMeta,
   type OperationFormData,
 } from '@/utils/operationExtras'
+import { logProjectActivity } from '@/utils/activityLog'
 
 export interface OperationCardMeta {
   operation_id: string
@@ -159,7 +160,51 @@ export function useOperations(clientId?: string) {
       .update({ status: toStatus })
       .eq('id', operationId)
 
-    if (!error) await fetchOperations()
+    if (!error) {
+      if (workspace?.id) {
+        await logProjectActivity(workspace.id, user?.id ?? null, 'operation', operationId, 'status', {
+          toStatus,
+        })
+      }
+      await fetchOperations()
+    }
+    return { error: error?.message ?? null }
+  }
+
+  const assignResponsible = async (operationId: string, responsibleId: string | null) => {
+    const { error } = await supabase
+      .from('operations')
+      .update({ responsible_id: responsibleId })
+      .eq('id', operationId)
+
+    if (!error) {
+      if (workspace?.id) {
+        await logProjectActivity(
+          workspace.id,
+          user?.id ?? null,
+          'operation',
+          operationId,
+          'assign_responsible',
+          { responsible_id: responsibleId },
+        )
+      }
+      await fetchOperations()
+    }
+    return { error: error?.message ?? null }
+  }
+
+  const archiveOperation = async (operationId: string) => {
+    const { error } = await supabase
+      .from('operations')
+      .update({ archived_at: new Date().toISOString() })
+      .eq('id', operationId)
+
+    if (!error) {
+      if (workspace?.id) {
+        await logProjectActivity(workspace.id, user?.id ?? null, 'operation', operationId, 'archive')
+      }
+      await fetchOperations()
+    }
     return { error: error?.message ?? null }
   }
 
@@ -173,6 +218,8 @@ export function useOperations(clientId?: string) {
     updateOperation,
     attachFiles,
     updateStatus,
+    assignResponsible,
+    archiveOperation,
   }
 }
 

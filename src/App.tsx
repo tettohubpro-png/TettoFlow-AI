@@ -10,6 +10,8 @@ import { DepartmentsPage } from '@/pages/DepartmentsPage'
 import { ApprovalsPage } from '@/pages/ApprovalsPage'
 import { AiPage } from '@/pages/AiPage'
 import { WhatsAppPage } from '@/pages/WhatsAppPage'
+import { AlertsPage } from '@/pages/AlertsPage'
+import { ReportsPage } from '@/pages/ReportsPage'
 
 export default function App() {
   return (
@@ -24,6 +26,8 @@ export default function App() {
             <Route path="projetos" element={<ProjectsPage />} />
             <Route path="departamentos" element={<DepartmentsPage />} />
             <Route path="aprovacoes" element={<ApprovalsPage />} />
+            <Route path="alertas" element={<AlertsPage />} />
+            <Route path="relatorios" element={<ReportsPage />} />
             <Route path="ia" element={<AiPage />} />
             <Route path="whatsapp" element={<WhatsAppPage />} />
           </Route>

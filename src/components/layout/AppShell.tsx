@@ -9,16 +9,18 @@ const nav = [
   { to: '/projetos', label: 'Operações', short: 'Ops' },
   { to: '/departamentos', label: 'Departamentos', short: 'Depts' },
   { to: '/aprovacoes', label: 'Aprovações', short: 'Aprov' },
+  { to: '/alertas', label: 'Alertas', short: 'Alert' },
+  { to: '/relatorios', label: 'Relatórios', short: 'Rel' },
   { to: '/ia', label: 'IA', short: 'IA' },
   { to: '/whatsapp', label: 'WhatsApp IA', short: 'Zap' },
 ]
 
 const bottomNav = [
   { to: '/', label: 'Home', end: true },
-  { to: '/crm', label: 'CRM' },
   { to: '/projetos', label: 'Ops' },
-  { to: '/aprovacoes', label: 'Aprov' },
-  { to: '/whatsapp', label: 'Zap' },
+  { to: '/departamentos', label: 'Depts' },
+  { to: '/relatorios', label: 'Rel' },
+  { to: '/alertas', label: 'Alert' },
 ]
 
 export function AppShell({ children }: { children?: ReactNode }) {

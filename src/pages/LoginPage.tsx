@@ -4,12 +4,13 @@ import { useNavigate } from 'react-router-dom'
 import { useAuth } from '@/contexts/AuthContext'
 
 export function LoginPage() {
-  const { signIn } = useAuth()
+  const { signIn, signInWithGoogle } = useAuth()
   const navigate = useNavigate()
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
+  const [googleLoading, setGoogleLoading] = useState(false)
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault()
@@ -19,6 +20,16 @@ export function LoginPage() {
     setLoading(false)
     if (err) setError(err)
     else navigate('/')
+  }
+
+  const handleGoogle = async () => {
+    setGoogleLoading(true)
+    setError(null)
+    const { error: err } = await signInWithGoogle()
+    if (err) {
+      setError(err)
+      setGoogleLoading(false)
+    }
   }
 
   return (
@@ -31,7 +42,9 @@ export function LoginPage() {
           TettoHub
         </p>
         <h1 className="mt-2 text-2xl font-bold text-white">TettoFlow AI OS</h1>
-        <p className="mt-1 text-sm text-slate-400">Entre com sua conta da agência</p>
+        <p className="mt-1 text-sm text-slate-400">
+          Entre com Gmail (recomendado) ou e-mail da agência
+        </p>
 
         {error && (
           <p className="mt-4 rounded-lg bg-red-500/10 px-3 py-2 text-sm text-red-400">
@@ -39,7 +52,22 @@ export function LoginPage() {
           </p>
         )}
 
-        <label className="mt-6 block text-sm text-slate-300">
+        <button
+          type="button"
+          onClick={handleGoogle}
+          disabled={googleLoading}
+          className="mt-6 flex min-h-12 w-full items-center justify-center gap-2 rounded-lg border border-slate-700 bg-slate-950 py-3 text-sm font-medium text-slate-200 hover:border-emerald-600/50 hover:text-emerald-300 disabled:opacity-50"
+        >
+          {googleLoading ? 'Redirecionando...' : 'Continuar com Google'}
+        </button>
+
+        <div className="my-5 flex items-center gap-3 text-xs text-slate-600">
+          <span className="h-px flex-1 bg-slate-800" />
+          ou e-mail
+          <span className="h-px flex-1 bg-slate-800" />
+        </div>
+
+        <label className="block text-sm text-slate-300">
           E-mail
           <input
             type="email"

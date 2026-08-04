@@ -1,4 +1,4 @@
-import type { MembershipRole } from '@/types/database'
+import type { AppUser, JobRole, MembershipRole } from '@/types/database'
 
 export const OPERATION_STATUS_LABELS: Record<string, string> = {
   DRAFT: 'Rascunho',
@@ -38,15 +38,50 @@ export const OPERATION_PRIORITY_LABELS: Record<string, string> = {
 }
 
 export const ROLE_LABELS: Record<MembershipRole, string> = {
-  OWNER: 'Proprietário',
+  OWNER: 'Proprietário (Master)',
   ADMIN: 'Administrador',
-  MANAGER: 'Gestor',
+  MANAGER: 'Gerente / Gestor',
   MEMBER: 'Membro',
   CLIENT: 'Cliente',
 }
 
-/** Papéis que podem gerenciar clientes e operações */
+export const JOB_ROLE_LABELS: Record<JobRole, string> = {
+  gerente: 'Gerente',
+  gestor: 'Gestor',
+  social_media: 'Social Media',
+  design: 'Design',
+  videomaker: 'Videomaker',
+  photographer: 'Fotógrafo',
+  video_editor: 'Editor de Vídeo',
+  traffic: 'Tráfego Pago',
+}
+
+export const JOB_ROLE_ORDER: JobRole[] = [
+  'gerente',
+  'gestor',
+  'social_media',
+  'design',
+  'videomaker',
+  'photographer',
+  'video_editor',
+  'traffic',
+]
+
+/** E-mail master do proprietário (Mairo / TettoHub) */
+export const MASTER_OWNER_EMAIL = 'tettohub@gmail.com'
+
 const MANAGER_ROLES: MembershipRole[] = ['OWNER', 'ADMIN', 'MANAGER']
+
+export function isMasterOwner(
+  role: MembershipRole | undefined | null,
+  appUser?: Pick<AppUser, 'email' | 'name'> | null,
+): boolean {
+  if (role === 'OWNER') return true
+  const email = appUser?.email?.toLowerCase() ?? ''
+  if (email === MASTER_OWNER_EMAIL) return true
+  const name = appUser?.name?.toLowerCase() ?? ''
+  return name.includes('mairo')
+}
 
 export function canManageClients(role: MembershipRole | undefined): boolean {
   if (!role) return false
@@ -55,6 +90,28 @@ export function canManageClients(role: MembershipRole | undefined): boolean {
 
 export function canViewAllClients(role: MembershipRole | undefined): boolean {
   return role === 'OWNER' || role === 'ADMIN'
+}
+
+export function canDeleteOperations(
+  role: MembershipRole | undefined | null,
+  appUser?: Pick<AppUser, 'email' | 'name'> | null,
+): boolean {
+  return isMasterOwner(role, appUser)
+}
+
+export function canAssignTasks(role: MembershipRole | undefined): boolean {
+  if (!role) return false
+  return MANAGER_ROLES.includes(role)
+}
+
+export function canSendClientAlerts(role: MembershipRole | undefined): boolean {
+  if (!role) return false
+  return MANAGER_ROLES.includes(role)
+}
+
+export function canViewTeamReports(role: MembershipRole | undefined): boolean {
+  if (!role) return false
+  return MANAGER_ROLES.includes(role)
 }
 
 export function nextOperationStatus(current: string): string | null {
@@ -91,19 +148,16 @@ export function canManageApprovals(role: MembershipRole | undefined): boolean {
   return MANAGER_ROLES.includes(role)
 }
 
-/** Social Media / gestores editam onboard e briefing */
 export function canEditBriefing(role: MembershipRole | undefined): boolean {
   if (!role) return false
   return MANAGER_ROLES.includes(role)
 }
 
-/** Videomaker / gestores sobem gravações */
 export function canUploadRecordings(role: MembershipRole | undefined): boolean {
   if (!role) return false
   return MANAGER_ROLES.includes(role) || role === 'MEMBER'
 }
 
-// Aliases legados
 export const PROJECT_STATUS_LABELS = OPERATION_STATUS_LABELS
 export const PROJECT_STATUS_ORDER = OPERATION_STATUS_ORDER
 export const nextProjectStatus = nextOperationStatus

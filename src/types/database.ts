@@ -38,9 +38,21 @@ export interface Membership {
   workspace_id: string
   user_id: string
   role: MembershipRole
+  job_role: JobRole | null
   created_at: string
   updated_at: string
 }
+
+/** Especialidade operacional do membro (hierarquia de função) */
+export type JobRole =
+  | 'gerente'
+  | 'gestor'
+  | 'social_media'
+  | 'design'
+  | 'videomaker'
+  | 'photographer'
+  | 'video_editor'
+  | 'traffic'
 
 export interface Client {
   id: string
@@ -149,7 +161,80 @@ export type Department =
   | 'design'
   | 'videomaker'
   | 'video_editor'
+  | 'photographer'
+  | 'traffic'
   | 'general'
+
+export interface ClientAssignment {
+  id: string
+  workspace_id: string
+  client_id: string
+  user_id: string
+  department: Exclude<Department, 'general'>
+  created_at: string
+  updated_at: string
+  users?: { id: string; name: string; email: string }
+  clients?: { name: string }
+}
+
+export type AlertChannel = 'whatsapp' | 'gmail'
+export type AlertType = 'monthly_report' | 'schedule' | 'themes'
+export type AlertStatus = 'draft' | 'queued' | 'sent' | 'failed'
+
+export interface ClientAlert {
+  id: string
+  workspace_id: string
+  client_id: string
+  channel: AlertChannel
+  alert_type: AlertType
+  subject: string | null
+  body: string
+  status: AlertStatus
+  created_by: string | null
+  sent_at: string | null
+  created_at: string
+  updated_at: string
+  clients?: { name: string }
+}
+
+export interface WorkDeliverables {
+  posts?: number
+  themes?: string[]
+  companies?: string[]
+  drive_files?: string[]
+  video_themes?: string[]
+  notes?: string
+}
+
+export interface WorkSession {
+  id: string
+  workspace_id: string
+  user_id: string
+  operation_id: string | null
+  client_id: string | null
+  department: string | null
+  started_at: string
+  ended_at: string | null
+  duration_minutes: number | null
+  summary: string | null
+  deliverables: WorkDeliverables
+  created_at: string
+  updated_at: string
+  users?: { name: string; email: string }
+  clients?: { name: string }
+  operations?: { title: string }
+}
+
+export interface ProjectActivity {
+  id: string
+  workspace_id: string
+  actor_id: string | null
+  entity_type: string
+  entity_id: string | null
+  action: string
+  detail: Record<string, unknown>
+  created_at: string
+}
 
 export type ApprovalType = 'INTERNAL' | 'CLIENT'
 export type ApprovalStatus =

@@ -10,7 +10,7 @@ import {
   type OperationFormData,
   type OperationLabel,
 } from '@/utils/operationExtras'
-import { openClientFile } from '@/utils/fileView'
+import { downloadClientFile, openClientFile } from '@/utils/fileView'
 
 type SectionKey = 'labels' | 'dates' | 'checklist' | 'attachments' | 'custom_fields'
 
@@ -38,14 +38,22 @@ export function OperationModal({
   const [existingFiles, setExistingFiles] = useState<ClientFile[]>([])
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [openingFileId, setOpeningFileId] = useState<string | null>(null)
+  const [busyFileId, setBusyFileId] = useState<string | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   const handleOpenFile = async (file: ClientFile) => {
-    setOpeningFileId(file.id)
+    setBusyFileId(file.id)
     setError(null)
     const result = await openClientFile(file)
-    setOpeningFileId(null)
+    setBusyFileId(null)
+    if (result.error) setError(result.error)
+  }
+
+  const handleDownloadFile = async (file: ClientFile) => {
+    setBusyFileId(file.id)
+    setError(null)
+    const result = await downloadClientFile(file)
+    setBusyFileId(null)
     if (result.error) setError(result.error)
   }
 
@@ -374,22 +382,35 @@ export function OperationModal({
               </h4>
               {existingFiles.length > 0 && (
                 <ul className="mb-2 space-y-1 text-sm">
-                  {existingFiles.map((f) => (
-                    <li key={f.id}>
-                      <button
-                        type="button"
-                        onClick={() => handleOpenFile(f)}
-                        disabled={openingFileId === f.id}
-                        className="inline-flex max-w-full items-center gap-1.5 rounded-md px-1 py-0.5 text-left text-sky-400 underline-offset-2 hover:text-sky-300 hover:underline disabled:opacity-60"
-                        title="Abrir anexo"
+                  {existingFiles.map((f) => {
+                    const busy = busyFileId === f.id
+                    return (
+                      <li
+                        key={f.id}
+                        className="flex items-center gap-2 rounded-md px-1 py-0.5"
                       >
-                        <span aria-hidden>📎</span>
-                        <span className="truncate">
-                          {openingFileId === f.id ? 'Abrindo…' : f.name}
-                        </span>
-                      </button>
-                    </li>
-                  ))}
+                        <button
+                          type="button"
+                          onClick={() => handleOpenFile(f)}
+                          disabled={busy}
+                          className="inline-flex min-w-0 flex-1 items-center gap-1.5 text-left text-sky-400 underline-offset-2 hover:text-sky-300 hover:underline disabled:opacity-60"
+                          title="Abrir anexo"
+                        >
+                          <span aria-hidden>📎</span>
+                          <span className="truncate">{busy ? 'Aguarde…' : f.name}</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleDownloadFile(f)}
+                          disabled={busy}
+                          className="shrink-0 rounded border border-slate-700 px-2 py-0.5 text-xs text-slate-300 hover:border-slate-500 hover:text-white disabled:opacity-60"
+                          title="Baixar anexo"
+                        >
+                          Baixar
+                        </button>
+                      </li>
+                    )
+                  })}
                 </ul>
               )}
               {pendingFiles.length > 0 && (

@@ -14,6 +14,7 @@ import {
   OPERATION_STATUS_ORDER,
   OPERATION_PRIORITY_LABELS,
   canDeleteOperations,
+  canOperateTasks,
   nextOperationStatus,
   previousOperationStatus,
 } from '@/utils/permissions'
@@ -48,9 +49,10 @@ export function ProjectsPage() {
   } = useOperations()
   const { clients } = useClients()
   const { requestApproval } = useApprovals()
-  const { role, appUser } = useAuth()
+  const { role } = useAuth()
   const { members } = useTeamMembers()
-  const canDelete = canDeleteOperations(role, appUser)
+  const canDelete = canDeleteOperations(role)
+  const canOperate = canOperateTasks(role)
 
   const [createOpen, setCreateOpen] = useState(false)
   const [editOpen, setEditOpen] = useState(false)
@@ -68,6 +70,7 @@ export function ProjectsPage() {
     : operations
 
   const handleCreate = async (form: OperationFormData, files: File[]) => {
+    if (!canOperate) return { error: 'Sem permissão para criar solicitações' }
     const { data, error } = await createOperation(form)
     if (error || !data) return { error: error ?? 'Erro ao criar' }
     if (files.length > 0) {
@@ -78,6 +81,7 @@ export function ProjectsPage() {
   }
 
   const handleUpdate = async (form: OperationFormData, files: File[]) => {
+    if (!canOperate) return { error: 'Sem permissão para editar (modo visualização)' }
     if (!editingDetails) return { error: 'Operação não encontrada' }
     const result = await updateOperation(editingDetails.id, form)
     if (result.error) return result
@@ -111,6 +115,7 @@ export function ProjectsPage() {
   }
 
   const moveToStatus = async (operationId: string, toStatus: OperationStatus) => {
+    if (!canOperate) return
     const op = operations.find((o) => o.id === operationId)
     if (!op || op.status === toStatus) return
     setMovingId(operationId)
@@ -153,13 +158,15 @@ export function ProjectsPage() {
             Pipeline de produção — arraste os cards entre as colunas
           </p>
         </div>
-        <button
-          type="button"
-          onClick={() => setCreateOpen(true)}
-          className="min-h-11 w-full rounded-lg bg-emerald-600 px-4 py-2.5 text-sm font-medium hover:bg-emerald-500 sm:w-auto"
-        >
-          Solicitação
-        </button>
+        {canOperate && (
+          <button
+            type="button"
+            onClick={() => setCreateOpen(true)}
+            className="min-h-11 w-full rounded-lg bg-emerald-600 px-4 py-2.5 text-sm font-medium hover:bg-emerald-500 sm:w-auto"
+          >
+            Solicitação
+          </button>
+        )}
       </header>
 
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3 border-b border-slate-800 pb-0">

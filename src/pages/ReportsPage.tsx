@@ -1,86 +1,95 @@
 import { useMemo, useState } from 'react'
+import { Navigate } from 'react-router-dom'
 import { useWorkSessions } from '@/hooks/useWorkSessions'
-import { useClients } from '@/hooks/useClients'
 import { useAuth } from '@/contexts/AuthContext'
 import { DEPARTMENT_LABELS } from '@/utils/departments'
-import { canViewTeamReports } from '@/utils/permissions'
-import type { Department, WorkDeliverables } from '@/types/database'
+import { canViewTeamReports, isMaster } from '@/utils/permissions'
+import type { Department } from '@/types/database'
+
+function formatDuration(minutes: number) {
+  const h = Math.floor(minutes / 60)
+  const m = minutes % 60
+  if (h <= 0) return `${m} min`
+  return `${h}h ${m.toString().padStart(2, '0')}min`
+}
+
+function liveMinutes(startedAt: string, untilIso?: string) {
+  const end = untilIso ? new Date(untilIso).getTime() : Date.now()
+  return Math.max(1, Math.round((end - new Date(startedAt).getTime()) / 60000))
+}
+
+const ONLINE_THRESHOLD_MS = 5 * 60_000
+
+function isSessionOnline(endedAt: string | null, updatedAt: string) {
+  if (endedAt) return false
+  return Date.now() - new Date(updatedAt).getTime() < ONLINE_THRESHOLD_MS
+}
 
 export function ReportsPage() {
   const [day, setDay] = useState(() => new Date().toISOString().slice(0, 10))
-  const { sessions, activeSession, loading, startSession, stopSession } = useWorkSessions(day)
-  const { clients } = useClients()
-  const { role, appUser } = useAuth()
-  const canViewAll = canViewTeamReports(role ?? undefined)
+  const { sessions, loading } = useWorkSessions(day)
+  const { role } = useAuth()
+  const canView = canViewTeamReports(role ?? undefined)
 
-  const [clientId, setClientId] = useState('')
-  const [department, setDepartment] = useState<Department>('design')
-  const [posts, setPosts] = useState('0')
-  const [themes, setThemes] = useState('')
-  const [driveFiles, setDriveFiles] = useState('')
-  const [summary, setSummary] = useState('')
-  const [feedback, setFeedback] = useState<string | null>(null)
+  const byEmployee = useMemo(() => {
+    const map = new Map<
+      string,
+      {
+        userId: string
+        name: string
+        email: string
+        minutes: number
+        sessions: number
+        online: boolean
+        startedAt?: string
+      }
+    >()
 
-  const visibleSessions = useMemo(() => {
-    if (canViewAll) return sessions
-    return sessions.filter((s) => s.user_id === appUser?.id)
-  }, [sessions, canViewAll, appUser?.id])
+    for (const s of sessions) {
+      const key = s.user_id
+      const current = map.get(key) ?? {
+        userId: s.user_id,
+        name: s.users?.name ?? 'Funcionário',
+        email: s.users?.email ?? '',
+        minutes: 0,
+        sessions: 0,
+        online: false,
+      }
+      current.sessions += 1
+      const online = isSessionOnline(s.ended_at, s.updated_at)
+      if (s.ended_at) {
+        current.minutes += s.duration_minutes ?? 0
+      } else if (online) {
+        current.online = true
+        current.startedAt = s.started_at
+        current.minutes += liveMinutes(s.started_at)
+      } else {
+        // Sessão abandonada: conta até o último heartbeat
+        current.minutes += liveMinutes(s.started_at, s.updated_at)
+      }
+      map.set(key, current)
+    }
+
+    return [...map.values()].sort((a, b) => b.minutes - a.minutes)
+  }, [sessions])
 
   const totals = useMemo(() => {
-    const minutes = visibleSessions.reduce((acc, s) => acc + (s.duration_minutes ?? 0), 0)
-    const postsCount = visibleSessions.reduce(
-      (acc, s) => acc + (Number(s.deliverables?.posts) || 0),
-      0,
-    )
-    return { minutes, postsCount, count: visibleSessions.length }
-  }, [visibleSessions])
+    const minutes = byEmployee.reduce((acc, e) => acc + e.minutes, 0)
+    const online = byEmployee.filter((e) => e.online).length
+    return { minutes, online, people: byEmployee.length, sessions: sessions.length }
+  }, [byEmployee, sessions.length])
 
-  const handleStart = async () => {
-    const { error } = await startSession({
-      client_id: clientId || undefined,
-      department,
-      summary: summary || undefined,
-    })
-    setFeedback(error ?? 'Cronômetro iniciado.')
-  }
-
-  const handleStop = async () => {
-    if (!activeSession) return
-    const deliverables: WorkDeliverables = {
-      posts: Number(posts) || 0,
-      themes: themes
-        .split(',')
-        .map((t) => t.trim())
-        .filter(Boolean),
-      companies: clientId
-        ? [clients.find((c) => c.id === clientId)?.name ?? ''].filter(Boolean)
-        : [],
-      drive_files: driveFiles
-        .split(',')
-        .map((t) => t.trim())
-        .filter(Boolean),
-      video_themes:
-        department === 'videomaker' || department === 'video_editor'
-          ? themes
-              .split(',')
-              .map((t) => t.trim())
-              .filter(Boolean)
-          : undefined,
-    }
-    const { error } = await stopSession(activeSession.id, deliverables, summary)
-    setFeedback(error ?? 'Sessão finalizada e salva no relatório diário.')
-    setPosts('0')
-    setThemes('')
-    setDriveFiles('')
+  if (!isMaster(role) || !canView) {
+    return <Navigate to="/" replace />
   }
 
   return (
     <div>
       <header className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
         <div>
-          <h2 className="text-2xl font-bold">Relatório diário</h2>
+          <h2 className="text-2xl font-bold">Ponto e relatório diário</h2>
           <p className="text-slate-400">
-            Tempo e entregas por funcionário (design, vídeo, tráfego…)
+            Tempo online dos funcionários (ponto automático no login)
           </p>
         </div>
         <label className="text-sm text-slate-400">
@@ -94,116 +103,75 @@ export function ReportsPage() {
         </label>
       </header>
 
-      <section className="mb-6 grid gap-3 rounded-xl border border-slate-800 bg-slate-900/40 p-4 sm:grid-cols-3">
+      <section className="mb-6 grid gap-3 rounded-xl border border-slate-800 bg-slate-900/40 p-4 sm:grid-cols-4">
+        <div>
+          <p className="text-xs text-slate-500">Funcionários</p>
+          <p className="text-2xl font-semibold">{totals.people}</p>
+        </div>
+        <div>
+          <p className="text-xs text-slate-500">Online agora</p>
+          <p className="text-2xl font-semibold text-emerald-400">{totals.online}</p>
+        </div>
+        <div>
+          <p className="text-xs text-slate-500">Tempo total</p>
+          <p className="text-2xl font-semibold">{formatDuration(totals.minutes)}</p>
+        </div>
         <div>
           <p className="text-xs text-slate-500">Sessões</p>
-          <p className="text-2xl font-semibold">{totals.count}</p>
+          <p className="text-2xl font-semibold">{totals.sessions}</p>
         </div>
-        <div>
-          <p className="text-xs text-slate-500">Minutos</p>
-          <p className="text-2xl font-semibold">{totals.minutes}</p>
-        </div>
-        <div>
-          <p className="text-xs text-slate-500">Posts registrados</p>
-          <p className="text-2xl font-semibold">{totals.postsCount}</p>
-        </div>
-      </section>
-
-      <section className="mb-8 rounded-xl border border-slate-800 bg-slate-900/40 p-4">
-        <h3 className="mb-3 text-sm font-semibold text-slate-300">Meu cronômetro</h3>
-        <div className="grid gap-3 sm:grid-cols-2">
-          <select
-            value={clientId}
-            onChange={(e) => setClientId(e.target.value)}
-            className="rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm"
-          >
-            <option value="">Empresa / cliente</option>
-            {clients.map((c) => (
-              <option key={c.id} value={c.id}>
-                {c.name}
-              </option>
-            ))}
-          </select>
-          <select
-            value={department}
-            onChange={(e) => setDepartment(e.target.value as Department)}
-            className="rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm"
-          >
-            {Object.entries(DEPARTMENT_LABELS).map(([k, label]) => (
-              <option key={k} value={k}>
-                {label}
-              </option>
-            ))}
-          </select>
-          <input
-            value={summary}
-            onChange={(e) => setSummary(e.target.value)}
-            placeholder="O que está fazendo"
-            className="rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm sm:col-span-2"
-          />
-        </div>
-
-        {activeSession ? (
-          <div className="mt-4 space-y-3 border-t border-slate-800 pt-4">
-            <p className="text-sm text-emerald-300">
-              Em andamento desde{' '}
-              {new Date(activeSession.started_at).toLocaleTimeString('pt-BR', {
-                hour: '2-digit',
-                minute: '2-digit',
-              })}
-            </p>
-            <div className="grid gap-3 sm:grid-cols-3">
-              <input
-                type="number"
-                min={0}
-                value={posts}
-                onChange={(e) => setPosts(e.target.value)}
-                placeholder="Qtd. posts"
-                className="rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm"
-              />
-              <input
-                value={themes}
-                onChange={(e) => setThemes(e.target.value)}
-                placeholder="Temas (separados por vírgula)"
-                className="rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm sm:col-span-2"
-              />
-              <input
-                value={driveFiles}
-                onChange={(e) => setDriveFiles(e.target.value)}
-                placeholder="Arquivos Drive (links ou nomes)"
-                className="rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm sm:col-span-3"
-              />
-            </div>
-            <button
-              type="button"
-              onClick={handleStop}
-              className="rounded-lg bg-emerald-600 px-4 py-2.5 text-sm font-medium hover:bg-emerald-500"
-            >
-              Finalizar e salvar entrega
-            </button>
-          </div>
-        ) : (
-          <button
-            type="button"
-            onClick={handleStart}
-            className="mt-4 rounded-lg border border-emerald-600/40 bg-emerald-600/15 px-4 py-2.5 text-sm text-emerald-300 hover:bg-emerald-600/25"
-          >
-            Iniciar cronômetro
-          </button>
-        )}
-        {feedback && <p className="mt-2 text-xs text-slate-400">{feedback}</p>}
       </section>
 
       <h3 className="mb-3 text-sm font-semibold uppercase tracking-wide text-slate-400">
-        Entregas do dia
+        Por funcionário
       </h3>
       {loading ? (
         <p className="text-slate-500">Carregando...</p>
-      ) : visibleSessions.length === 0 ? (
+      ) : byEmployee.length === 0 ? (
+        <p className="text-slate-500">Nenhum ponto registrado neste dia.</p>
+      ) : (
+        <ul className="mb-8 space-y-2">
+          {byEmployee.map((e) => (
+            <li
+              key={e.userId}
+              className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-slate-800 bg-slate-950/60 p-3"
+            >
+              <div className="min-w-0">
+                <p className="font-medium">{e.name}</p>
+                <p className="truncate text-xs text-slate-500">{e.email}</p>
+              </div>
+              <div className="flex items-center gap-3 text-sm">
+                {e.online ? (
+                  <span className="inline-flex items-center gap-1.5 text-xs text-emerald-300">
+                    <span className="h-2 w-2 animate-pulse rounded-full bg-emerald-400" />
+                    Online desde{' '}
+                    {e.startedAt
+                      ? new Date(e.startedAt).toLocaleTimeString('pt-BR', {
+                          hour: '2-digit',
+                          minute: '2-digit',
+                        })
+                      : '—'}
+                  </span>
+                ) : (
+                  <span className="text-xs text-slate-500">Offline</span>
+                )}
+                <span className="font-semibold text-emerald-400">{formatDuration(e.minutes)}</span>
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      <h3 className="mb-3 text-sm font-semibold uppercase tracking-wide text-slate-400">
+        Sessões do dia
+      </h3>
+      {loading ? (
+        <p className="text-slate-500">Carregando...</p>
+      ) : sessions.length === 0 ? (
         <p className="text-slate-500">Nenhuma sessão neste dia.</p>
       ) : (
         <ul className="space-y-2">
-          {visibleSessions.map((s) => (
+          {sessions.map((s) => (
             <li
               key={s.id}
               className="rounded-lg border border-slate-800 bg-slate-950/60 p-3 text-sm"
@@ -215,23 +183,30 @@ export function ReportsPage() {
                     {s.clients?.name ?? '—'} ·{' '}
                     {s.department
                       ? DEPARTMENT_LABELS[s.department as Department] ?? s.department
-                      : '—'}
+                      : 'Operação'}
+                  </p>
+                  <p className="mt-1 text-xs text-slate-500">
+                    {new Date(s.started_at).toLocaleTimeString('pt-BR', {
+                      hour: '2-digit',
+                      minute: '2-digit',
+                    })}
+                    {s.ended_at
+                      ? ` → ${new Date(s.ended_at).toLocaleTimeString('pt-BR', {
+                          hour: '2-digit',
+                          minute: '2-digit',
+                        })}`
+                      : ' → agora'}
                   </p>
                 </div>
                 <p className="text-xs text-emerald-400">
-                  {s.ended_at ? `${s.duration_minutes ?? 0} min` : 'Em andamento'}
+                  {s.ended_at
+                    ? formatDuration(s.duration_minutes ?? 0)
+                    : isSessionOnline(s.ended_at, s.updated_at)
+                      ? `${formatDuration(liveMinutes(s.started_at))} (online)`
+                      : `${formatDuration(liveMinutes(s.started_at, s.updated_at))} (encerrada)`}
                 </p>
               </div>
               {s.summary && <p className="mt-1 text-xs text-slate-400">{s.summary}</p>}
-              <p className="mt-1 text-xs text-slate-500">
-                Posts: {s.deliverables?.posts ?? 0}
-                {s.deliverables?.themes?.length
-                  ? ` · Temas: ${s.deliverables.themes.join(', ')}`
-                  : ''}
-                {s.deliverables?.drive_files?.length
-                  ? ` · Drive: ${s.deliverables.drive_files.join(', ')}`
-                  : ''}
-              </p>
             </li>
           ))}
         </ul>

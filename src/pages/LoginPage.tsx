@@ -1,13 +1,16 @@
 import { useState } from 'react'
 import type { FormEvent } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
+import { Eye, EyeOff } from 'lucide-react'
 import { useAuth } from '@/contexts/AuthContext'
+import { AuthLayout } from '@/components/auth/AuthLayout'
 
 export function LoginPage() {
   const { signIn, signInWithGoogle } = useAuth()
   const navigate = useNavigate()
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
+  const [showPassword, setShowPassword] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
   const [googleLoading, setGoogleLoading] = useState(false)
@@ -33,21 +36,13 @@ export function LoginPage() {
   }
 
   return (
-    <div className="flex min-h-dvh items-center justify-center bg-slate-950 px-4 py-8 safe-pt safe-pb">
-      <form
-        onSubmit={handleSubmit}
-        className="w-full max-w-md rounded-2xl border border-slate-800 bg-slate-900 p-6 shadow-xl sm:p-8"
-      >
-        <p className="text-xs font-semibold uppercase tracking-widest text-emerald-400">
-          TettoHub
-        </p>
-        <h1 className="mt-2 text-2xl font-bold text-white">TettoFlow AI OS</h1>
-        <p className="mt-1 text-sm text-slate-400">
-          Entre com Gmail (recomendado) ou e-mail da agência
-        </p>
-
+    <AuthLayout subtitle="Entre com suas credenciais">
+      <form onSubmit={handleSubmit}>
         {error && (
-          <p className="mt-4 rounded-lg bg-red-500/10 px-3 py-2 text-sm text-red-400">
+          <p
+            className="mb-4 rounded-[10px] px-3 py-2 text-sm"
+            style={{ background: 'var(--color-danger-dim)', color: 'var(--color-danger)' }}
+          >
             {error}
           </p>
         )}
@@ -56,50 +51,69 @@ export function LoginPage() {
           type="button"
           onClick={handleGoogle}
           disabled={googleLoading}
-          className="mt-6 flex min-h-12 w-full items-center justify-center gap-2 rounded-lg border border-slate-700 bg-slate-950 py-3 text-sm font-medium text-slate-200 hover:border-emerald-600/50 hover:text-emerald-300 disabled:opacity-50"
+          className="tf-btn tf-btn-ghost w-full"
         >
           {googleLoading ? 'Redirecionando...' : 'Continuar com Google'}
         </button>
 
-        <div className="my-5 flex items-center gap-3 text-xs text-slate-600">
-          <span className="h-px flex-1 bg-slate-800" />
+        <div className="my-5 flex items-center gap-3 text-xs" style={{ color: 'var(--color-text3)' }}>
+          <span className="h-px flex-1" style={{ background: 'var(--color-border)' }} />
           ou e-mail
-          <span className="h-px flex-1 bg-slate-800" />
+          <span className="h-px flex-1" style={{ background: 'var(--color-border)' }} />
         </div>
 
-        <label className="block text-sm text-slate-300">
-          E-mail
+        <label className="mb-3.5 block">
+          <span className="tf-label">E-mail ou usuário</span>
           <input
-            type="email"
+            type="text"
             required
-            autoComplete="email"
-            inputMode="email"
+            autoComplete="username"
             value={email}
             onChange={(e) => setEmail(e.target.value)}
-            className="mt-1 min-h-11 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2.5 text-white outline-none focus:border-emerald-500"
+            placeholder="admin ou seu@email.com"
+            className="tf-input"
           />
         </label>
 
-        <label className="mt-4 block text-sm text-slate-300">
-          Senha
-          <input
-            type="password"
-            required
-            autoComplete="current-password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            className="mt-1 min-h-11 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2.5 text-white outline-none focus:border-emerald-500"
-          />
+        <label className="mb-3.5 block">
+          <div className="mb-1.5 flex items-center justify-between">
+            <span className="tf-label" style={{ marginBottom: 0 }}>
+              Senha
+            </span>
+            <Link
+              to="/recuperar-senha"
+              className="text-xs font-medium"
+              style={{ color: 'var(--color-accent)' }}
+            >
+              Esqueci minha senha
+            </Link>
+          </div>
+          <div className="relative">
+            <input
+              type={showPassword ? 'text' : 'password'}
+              required
+              autoComplete="current-password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              className="tf-input"
+              style={{ paddingRight: 40 }}
+            />
+            <button
+              type="button"
+              onClick={() => setShowPassword((v) => !v)}
+              aria-label={showPassword ? 'Ocultar senha' : 'Mostrar senha'}
+              className="absolute top-1/2 flex -translate-y-1/2 items-center"
+              style={{ right: 12, color: 'var(--color-text3)', background: 'none', border: 'none' }}
+            >
+              {showPassword ? <EyeOff size={15} /> : <Eye size={15} />}
+            </button>
+          </div>
         </label>
 
-        <button
-          type="submit"
-          disabled={loading}
-          className="mt-6 min-h-12 w-full rounded-lg bg-emerald-600 py-3 font-medium text-white hover:bg-emerald-500 disabled:opacity-50"
-        >
+        <button type="submit" disabled={loading} className="tf-btn tf-btn-primary mt-1 w-full">
           {loading ? 'Entrando...' : 'Entrar'}
         </button>
       </form>
-    </div>
+    </AuthLayout>
   )
 }

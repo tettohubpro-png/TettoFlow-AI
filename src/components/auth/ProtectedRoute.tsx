@@ -1,9 +1,13 @@
-import { Navigate, Outlet } from 'react-router-dom'
+import { Navigate, Outlet, useLocation } from 'react-router-dom'
 import { useAuth } from '@/contexts/AuthContext'
 import { AppShell } from '@/components/layout/AppShell'
+import { ForceChangePasswordModal } from '@/components/auth/ForceChangePasswordModal'
+import { AutoPunchClock } from '@/hooks/useWorkSessions'
+import { canAccessPath } from '@/utils/permissions'
 
 export function ProtectedRoute() {
-  const { user, loading } = useAuth()
+  const { user, loading, role, mustChangePassword } = useAuth()
+  const location = useLocation()
 
   if (loading) {
     return (
@@ -15,8 +19,14 @@ export function ProtectedRoute() {
 
   if (!user) return <Navigate to="/login" replace />
 
+  if (role && !canAccessPath(role, location.pathname)) {
+    return <Navigate to="/" replace />
+  }
+
   return (
     <AppShell>
+      <AutoPunchClock />
+      {mustChangePassword && <ForceChangePasswordModal />}
       <Outlet />
     </AppShell>
   )

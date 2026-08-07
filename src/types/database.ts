@@ -21,6 +21,7 @@ export interface AppUser {
   name: string
   email: string
   avatar_url: string | null
+  must_change_password?: boolean
   created_at: string
   updated_at: string
 }
@@ -120,6 +121,25 @@ export interface FinancialEntry {
   created_at: string
   updated_at: string
   clients?: { name: string }
+}
+
+export type CompanyBillKind = 'company' | 'employee'
+
+export interface CompanyBill {
+  id: string
+  workspace_id: string
+  name: string
+  amount: number
+  due_day: number
+  kind: CompanyBillKind
+  category: string
+  notes: string | null
+  active: boolean
+  employee_user_id: string | null
+  created_by: string | null
+  created_at: string
+  updated_at: string
+  users?: { name: string; email: string } | null
 }
 
 export interface ClientContact {

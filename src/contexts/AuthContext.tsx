@@ -10,6 +10,8 @@ import {
 import type { Session, User } from '@supabase/supabase-js'
 import { supabase } from '@/lib/supabase'
 import type { AppUser, Membership, MembershipRole, Workspace } from '@/types/database'
+import { normalizeLoginIdentifier, isEmployee } from '@/utils/permissions'
+import { punchOutUser } from '@/utils/punchClock'
 
 interface AuthContextValue {
   user: User | null
@@ -19,10 +21,14 @@ interface AuthContextValue {
   workspace: Workspace | null
   role: MembershipRole | null
   loading: boolean
+  mustChangePassword: boolean
   signIn: (email: string, password: string) => Promise<{ error: string | null }>
   signInWithGoogle: () => Promise<{ error: string | null }>
   signOut: () => Promise<void>
   refreshSession: () => Promise<void>
+  resetPassword: (email: string) => Promise<{ error: string | null }>
+  updatePassword: (newPassword: string) => Promise<{ error: string | null }>
+  clearMustChangePassword: () => Promise<{ error: string | null }>
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null)
@@ -51,13 +57,29 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
 
     if (!userRow) {
-      setAppUser(null)
-      setMembership(null)
-      setWorkspace(null)
-      return
+      // Só cria OWNER na instalação inicial (zero workspaces). Depois disso,
+      // usuários sem membership precisam ser convidados pelo Master.
+      const { error: bootErr } = await supabase.rpc('bootstrap_my_workspace', {
+        p_name: 'TettoHub',
+      })
+      if (bootErr) {
+        console.error('bootstrap_my_workspace:', bootErr.message)
+        setAppUser(null)
+        setMembership(null)
+        setWorkspace(null)
+        return
+      }
+      const { data: retryUser } = await supabase.from('users').select('*').eq('id', userId).maybeSingle()
+      if (!retryUser) {
+        setAppUser(null)
+        setMembership(null)
+        setWorkspace(null)
+        return
+      }
+      setAppUser(retryUser as AppUser)
+    } else {
+      setAppUser(userRow as AppUser)
     }
-
-    setAppUser(userRow as AppUser)
 
     const { data: membershipRow, error: memErr } = await supabase
       .from('memberships')
@@ -68,7 +90,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       .maybeSingle()
 
     if (memErr || !membershipRow) {
-      console.error('Erro ao carregar membership:', memErr?.message)
+      console.error(
+        'Erro ao carregar membership:',
+        memErr?.message ?? 'Sem membership — peça ao Master para adicionar na equipe.',
+      )
       setMembership(null)
       setWorkspace(null)
       return
@@ -121,7 +146,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return () => sub.subscription.unsubscribe()
   }, [loadAppContext])
 
-  const signIn = useCallback(async (email: string, password: string) => {
+  const signIn = useCallback(async (identifier: string, password: string) => {
+    const email = normalizeLoginIdentifier(identifier)
     const { error } = await supabase.auth.signInWithPassword({ email, password })
     return { error: error?.message ?? null }
   }, [])
@@ -141,13 +167,45 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [])
 
   const signOut = useCallback(async () => {
+    if (membership?.role && isEmployee(membership.role) && membership.workspace_id && user?.id) {
+      try {
+        await punchOutUser(membership.workspace_id, user.id)
+      } catch {
+        /* ignore punch-out errors on logout */
+      }
+    }
     await supabase.auth.signOut()
     setAppUser(null)
     setMembership(null)
     setWorkspace(null)
+  }, [membership?.role, membership?.workspace_id, user?.id])
+
+  const resetPassword = useCallback(async (email: string) => {
+    const { error } = await supabase.auth.resetPasswordForEmail(normalizeLoginIdentifier(email), {
+      redirectTo: `${window.location.origin}/redefinir-senha`,
+    })
+    return { error: error?.message ?? null }
   }, [])
 
+  const updatePassword = useCallback(async (newPassword: string) => {
+    const { error } = await supabase.auth.updateUser({ password: newPassword })
+    return { error: error?.message ?? null }
+  }, [])
+
+  const clearMustChangePassword = useCallback(async () => {
+    if (!user) return { error: 'Sessão inválida' }
+    const { error } = await supabase
+      .from('users')
+      .update({ must_change_password: false, updated_at: new Date().toISOString() })
+      .eq('id', user.id)
+    if (!error) {
+      setAppUser((prev) => (prev ? { ...prev, must_change_password: false } : prev))
+    }
+    return { error: error?.message ?? null }
+  }, [user])
+
   const role = membership?.role ?? null
+  const mustChangePassword = Boolean(appUser?.must_change_password)
 
   const value = useMemo(
     () => ({
@@ -158,10 +216,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       workspace,
       role,
       loading,
+      mustChangePassword,
       signIn,
       signInWithGoogle,
       signOut,
       refreshSession,
+      resetPassword,
+      updatePassword,
+      clearMustChangePassword,
     }),
     [
       user,
@@ -171,10 +233,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       workspace,
       role,
       loading,
+      mustChangePassword,
       signIn,
       signInWithGoogle,
       signOut,
       refreshSession,
+      resetPassword,
+      updatePassword,
+      clearMustChangePassword,
     ],
   )
 

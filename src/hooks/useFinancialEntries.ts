@@ -72,5 +72,17 @@ export function useFinancialEntries() {
     return { error: err?.message ?? null }
   }
 
-  return { entries, loading, error, refresh: fetchEntries, createEntry, updateStatus }
+  const updateEntry = async (
+    id: string,
+    patch: Partial<Pick<FinancialEntry, 'description' | 'amount' | 'due_date' | 'category' | 'type'>>,
+  ) => {
+    const { error: err } = await supabase
+      .from('financial_entries')
+      .update({ ...patch, updated_at: new Date().toISOString() })
+      .eq('id', id)
+    if (!err) await fetchEntries()
+    return { error: err?.message ?? null }
+  }
+
+  return { entries, loading, error, refresh: fetchEntries, createEntry, updateStatus, updateEntry }
 }

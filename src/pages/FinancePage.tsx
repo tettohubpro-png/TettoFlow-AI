@@ -1,5 +1,5 @@
 import { useMemo, useState, type FormEvent } from 'react'
-import { AlertTriangle, CheckCircle2, Clock, Plus, Trash2, XCircle } from 'lucide-react'
+import { AlertTriangle, CheckCircle2, Clock, Pencil, Plus, Trash2, XCircle } from 'lucide-react'
 import { useAuth } from '@/contexts/AuthContext'
 import { useFinancialEntries } from '@/hooks/useFinancialEntries'
 import { useCompanyBills, daysUntil, nextDueDateForDay } from '@/hooks/useCompanyBills'
@@ -29,7 +29,7 @@ export function FinancePage() {
   const { role } = useAuth()
   const canView = canViewFinance(role ?? undefined)
   const canManage = canManageFinance(role ?? undefined)
-  const { entries, loading, error, createEntry, updateStatus } = useFinancialEntries()
+  const { entries, loading, error, createEntry, updateStatus, updateEntry } = useFinancialEntries()
   const {
     bills: companyBills,
     loading: loadingCompany,
@@ -48,6 +48,8 @@ export function FinancePage() {
   const { members } = useTeamMembers()
 
   const [tab, setTab] = useState<TabKey>('overview')
+  const [highlightBillId, setHighlightBillId] = useState<string | null>(null)
+  const [editingEntryId, setEditingEntryId] = useState<string | null>(null)
   const [showEntryForm, setShowEntryForm] = useState(false)
   const [showBillForm, setShowBillForm] = useState(false)
   const [billKind, setBillKind] = useState<CompanyBillKind>('company')
@@ -262,12 +264,23 @@ export function FinancePage() {
           </div>
 
           <section className="mt-6 rounded-xl border border-slate-800 bg-slate-900/40 p-4">
-            <div className="mb-3 flex items-center gap-2">
-              <AlertTriangle size={16} className="text-amber-300" />
-              <h3 className="font-semibold text-slate-200">Próximos vencimentos</h3>
-              <span className="text-xs text-slate-500">
-                {totals.dueSoon} nos próximos 7 dias · {totals.overdue} lançamentos atrasados
-              </span>
+            <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <AlertTriangle size={16} className="text-amber-300" />
+                <h3 className="font-semibold text-slate-200">Próximos vencimentos</h3>
+                <span className="text-xs text-slate-500">
+                  {totals.dueSoon} nos próximos 7 dias · {totals.overdue} lançamentos atrasados
+                </span>
+              </div>
+              {canManage && (
+                <button
+                  type="button"
+                  onClick={() => setTab('company')}
+                  className="rounded-full border border-slate-700 px-2.5 py-1 text-xs text-slate-300 hover:border-emerald-500/40"
+                >
+                  Gerenciar contas
+                </button>
+              )}
             </div>
             {upcomingBills.length === 0 ? (
               <p className="text-sm text-slate-500">Nenhuma conta ativa cadastrada.</p>
@@ -291,14 +304,90 @@ export function FinancePage() {
                           Vence {new Date(due + 'T12:00:00').toLocaleDateString('pt-BR')}
                         </p>
                       </div>
-                      <div className="flex items-center gap-3">
+                      <div className="flex flex-wrap items-center gap-2 sm:gap-3">
                         <span className={`text-xs ${urg.className}`}>{urg.text}</span>
-                        <span className="font-semibold text-emerald-300">{formatBRL(Number(bill.amount))}</span>
+                        <span className="font-semibold text-emerald-300">
+                          {formatBRL(Number(bill.amount))}
+                        </span>
+                        {canManage && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setHighlightBillId(bill.id)
+                              setTab(bill.kind === 'employee' ? 'employees' : 'company')
+                            }}
+                            className="inline-flex items-center gap-1 rounded-full bg-violet-500/15 px-2.5 py-1 text-xs text-violet-200 hover:bg-violet-500/25"
+                          >
+                            <Pencil size={12} /> Editar
+                          </button>
+                        )}
                       </div>
                     </li>
                   )
                 })}
               </ul>
+            )}
+
+            {entries.filter((e) => e.status === 'pending').length > 0 && (
+              <div className="mt-5 border-t border-slate-800 pt-4">
+                <div className="mb-2 flex items-center justify-between gap-2">
+                  <h4 className="text-sm font-medium text-slate-300">
+                    Pagamentos de clientes / lançamentos
+                  </h4>
+                  <button
+                    type="button"
+                    onClick={() => setTab('entries')}
+                    className="text-xs text-emerald-400 hover:underline"
+                  >
+                    Ver lançamentos
+                  </button>
+                </div>
+                <ul className="space-y-2">
+                  {entries
+                    .filter((e) => e.status === 'pending')
+                    .slice(0, 6)
+                    .map((entry) => {
+                      const days = daysUntil(entry.due_date)
+                      const urg = urgencyLabel(days)
+                      return (
+                        <li
+                          key={entry.id}
+                          className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-slate-950/40 px-3 py-2 text-sm"
+                        >
+                          <div>
+                            <p className="font-medium">{entry.description}</p>
+                            <p className="text-xs text-slate-500">
+                              {entry.clients?.name ? `${entry.clients.name} · ` : ''}
+                              {new Date(entry.due_date + 'T00:00:00').toLocaleDateString('pt-BR')}
+                            </p>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <span className={`text-xs ${urg.className}`}>{urg.text}</span>
+                            <span
+                              className={
+                                entry.type === 'income' ? 'text-emerald-400' : 'text-red-400'
+                              }
+                            >
+                              {formatBRL(entry.amount)}
+                            </span>
+                            {canManage && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setEditingEntryId(entry.id)
+                                  setTab('entries')
+                                }}
+                                className="inline-flex items-center gap-1 rounded-full border border-slate-700 px-2 py-1 text-xs text-slate-300"
+                              >
+                                <Pencil size={12} /> Editar data
+                              </button>
+                            )}
+                          </div>
+                        </li>
+                      )
+                    })}
+                </ul>
+              </div>
             )}
           </section>
         </>
@@ -311,6 +400,7 @@ export function FinancePage() {
           bills={companyBills}
           loading={loadingCompany}
           canManage={canManage}
+          highlightId={highlightBillId}
           onToggle={(id, active) => updateBill(id, { active })}
           onDelete={deleteBill}
           onSaveAmount={(id, amount) => updateBill(id, { amount })}
@@ -327,6 +417,7 @@ export function FinancePage() {
           loading={loadingEmployees}
           canManage={canManage}
           employeeMode
+          highlightId={highlightBillId}
           onToggle={(id, active) => updateEmployeeBill(id, { active })}
           onDelete={deleteEmployeeBill}
           onSaveAmount={(id, amount) => updateEmployeeBill(id, { amount })}
@@ -525,7 +616,15 @@ export function FinancePage() {
                     entry={entry}
                     today={today}
                     canManage={canManage}
+                    editing={editingEntryId === entry.id}
+                    onStartEdit={() => setEditingEntryId(entry.id)}
+                    onCancelEdit={() => setEditingEntryId(null)}
                     onUpdateStatus={updateStatus}
+                    onSave={async (id, patch) => {
+                      const result = await updateEntry(id, patch)
+                      if (!result.error) setEditingEntryId(null)
+                      return result
+                    }}
                   />
                 ))}
               </ul>
@@ -569,6 +668,7 @@ function BillsPanel({
   loading,
   canManage,
   employeeMode,
+  highlightId,
   onToggle,
   onDelete,
   onSaveAmount,
@@ -581,6 +681,7 @@ function BillsPanel({
   loading: boolean
   canManage: boolean
   employeeMode?: boolean
+  highlightId?: string | null
   onToggle: (id: string, active: boolean) => Promise<{ error: string | null }>
   onDelete: (id: string) => Promise<{ error: string | null }>
   onSaveAmount: (id: string, amount: number) => Promise<{ error: string | null }>
@@ -601,20 +702,25 @@ function BillsPanel({
             const due = nextDueDateForDay(bill.due_day)
             const days = daysUntil(due)
             const urg = urgencyLabel(days)
+            const highlighted = highlightId === bill.id
             return (
               <li
                 key={bill.id}
+                id={`bill-${bill.id}`}
                 className={`rounded-lg border px-3 py-3 ${
-                  bill.active
-                    ? 'border-slate-800 bg-slate-950/60'
-                    : 'border-slate-800/50 bg-slate-950/30 opacity-60'
+                  highlighted
+                    ? 'border-violet-500/50 bg-violet-950/30 ring-1 ring-violet-500/30'
+                    : bill.active
+                      ? 'border-slate-800 bg-slate-950/60'
+                      : 'border-slate-800/50 bg-slate-950/30 opacity-60'
                 }`}
               >
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                   <div className="min-w-0">
                     <p className="font-medium">{bill.name}</p>
                     <p className="text-xs text-slate-500">
-                      Dia {bill.due_day} · próximo {new Date(due + 'T12:00:00').toLocaleDateString('pt-BR')}
+                      Dia {bill.due_day} · próximo{' '}
+                      {new Date(due + 'T12:00:00').toLocaleDateString('pt-BR')}
                       {employeeMode && bill.users?.name ? ` · ${bill.users.name}` : ''}
                     </p>
                     {bill.notes && <p className="mt-1 text-xs text-slate-500">{bill.notes}</p>}
@@ -623,30 +729,35 @@ function BillsPanel({
                     <span className={`text-xs ${urg.className}`}>{urg.text}</span>
                     {canManage ? (
                       <>
-                        <input
-                          type="number"
-                          min={0}
-                          step="0.01"
-                          defaultValue={Number(bill.amount)}
-                          onBlur={(e) => {
-                            const v = Number(e.target.value)
-                            if (!Number.isNaN(v) && v !== Number(bill.amount)) onSaveAmount(bill.id, v)
-                          }}
-                          className="w-28 rounded border border-slate-700 bg-slate-950 px-2 py-1 text-sm"
-                          title="Valor mensal"
-                        />
-                        <input
-                          type="number"
-                          min={1}
-                          max={28}
-                          defaultValue={bill.due_day}
-                          onBlur={(e) => {
-                            const v = Number(e.target.value)
-                            if (!Number.isNaN(v) && v !== bill.due_day) onSaveDueDay(bill.id, v)
-                          }}
-                          className="w-16 rounded border border-slate-700 bg-slate-950 px-2 py-1 text-sm"
-                          title="Dia vencimento"
-                        />
+                        <label className="flex flex-col gap-0.5 text-[10px] text-slate-500">
+                          Valor
+                          <input
+                            type="number"
+                            min={0}
+                            step="0.01"
+                            defaultValue={Number(bill.amount)}
+                            onBlur={(e) => {
+                              const v = Number(e.target.value)
+                              if (!Number.isNaN(v) && v !== Number(bill.amount))
+                                onSaveAmount(bill.id, v)
+                            }}
+                            className="w-28 rounded border border-slate-700 bg-slate-950 px-2 py-1 text-sm text-slate-100"
+                          />
+                        </label>
+                        <label className="flex flex-col gap-0.5 text-[10px] text-slate-500">
+                          Dia
+                          <input
+                            type="number"
+                            min={1}
+                            max={28}
+                            defaultValue={bill.due_day}
+                            onBlur={(e) => {
+                              const v = Number(e.target.value)
+                              if (!Number.isNaN(v) && v !== bill.due_day) onSaveDueDay(bill.id, v)
+                            }}
+                            className="w-16 rounded border border-slate-700 bg-slate-950 px-2 py-1 text-sm text-slate-100"
+                          />
+                        </label>
                         <button
                           type="button"
                           onClick={() => onMarkPaid(bill)}
@@ -692,7 +803,11 @@ function EntryRow({
   entry,
   today,
   canManage,
+  editing,
+  onStartEdit,
+  onCancelEdit,
   onUpdateStatus,
+  onSave,
 }: {
   entry: {
     id: string
@@ -706,9 +821,82 @@ function EntryRow({
   }
   today: string
   canManage: boolean
+  editing: boolean
+  onStartEdit: () => void
+  onCancelEdit: () => void
   onUpdateStatus: (id: string, status: FinancialEntryStatus) => void
+  onSave: (
+    id: string,
+    patch: { description?: string; amount?: number; due_date?: string },
+  ) => Promise<{ error: string | null }>
 }) {
   const overdue = entry.status === 'pending' && entry.due_date < today
+  const [description, setDescription] = useState(entry.description)
+  const [amount, setAmount] = useState(String(entry.amount))
+  const [dueDate, setDueDate] = useState(entry.due_date)
+  const [saving, setSaving] = useState(false)
+
+  if (editing && canManage) {
+    return (
+      <li className="rounded-lg border border-violet-500/40 bg-violet-950/20 px-3 py-3 text-sm">
+        <div className="grid gap-2 sm:grid-cols-3">
+          <label className="sm:col-span-3">
+            <span className="text-[10px] text-slate-500">Descrição</span>
+            <input
+              className={inputClass}
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+            />
+          </label>
+          <label>
+            <span className="text-[10px] text-slate-500">Valor</span>
+            <input
+              type="number"
+              min={0}
+              step="0.01"
+              className={inputClass}
+              value={amount}
+              onChange={(e) => setAmount(e.target.value)}
+            />
+          </label>
+          <label>
+            <span className="text-[10px] text-slate-500">Vencimento</span>
+            <input
+              type="date"
+              className={inputClass}
+              value={dueDate}
+              onChange={(e) => setDueDate(e.target.value)}
+            />
+          </label>
+          <div className="flex items-end gap-2">
+            <button
+              type="button"
+              disabled={saving}
+              onClick={async () => {
+                setSaving(true)
+                await onSave(entry.id, {
+                  description: description.trim(),
+                  amount: Number(amount),
+                  due_date: dueDate,
+                })
+                setSaving(false)
+              }}
+              className="min-h-11 rounded-lg bg-emerald-600 px-3 text-xs font-medium"
+            >
+              {saving ? 'Salvando…' : 'Salvar'}
+            </button>
+            <button
+              type="button"
+              onClick={onCancelEdit}
+              className="min-h-11 rounded-lg border border-slate-700 px-3 text-xs"
+            >
+              Cancelar
+            </button>
+          </div>
+        </div>
+      </li>
+    )
+  }
 
   return (
     <li className="flex flex-col gap-2 rounded-lg bg-slate-950/60 px-3 py-3 text-sm sm:flex-row sm:items-center sm:justify-between">
@@ -720,10 +908,19 @@ function EntryRow({
           {new Date(entry.due_date + 'T00:00:00').toLocaleDateString('pt-BR')}
         </p>
       </div>
-      <div className="flex shrink-0 items-center gap-3">
+      <div className="flex shrink-0 flex-wrap items-center gap-2 sm:gap-3">
         <span className={entry.type === 'income' ? 'text-emerald-400' : 'text-red-400'}>
           {entry.type === 'income' ? '+' : '−'} {formatBRL(entry.amount)}
         </span>
+        {canManage && (
+          <button
+            type="button"
+            onClick={onStartEdit}
+            className="inline-flex items-center gap-1 rounded-full border border-slate-700 px-2 py-1 text-xs text-slate-300"
+          >
+            <Pencil size={12} /> Editar
+          </button>
+        )}
         {entry.status === 'paid' ? (
           <span className="flex items-center gap-1 text-xs text-emerald-400">
             <CheckCircle2 size={14} /> Pago

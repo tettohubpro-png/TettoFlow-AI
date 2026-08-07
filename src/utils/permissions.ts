@@ -163,7 +163,8 @@ export type NavItem = {
 
 const ALL_NAV: NavItem[] = [
   { to: '/', label: 'Dashboard', short: 'Home', end: true },
-  { to: '/projetos', label: 'Tarefas', short: 'Tasks' },
+  { to: '/tarefas', label: 'Tarefas', short: 'Tasks' },
+  { to: '/conteudo', label: 'Conteúdo', short: 'Cont' },
   { to: '/crm', label: 'CRM', short: 'CRM' },
   { to: '/financeiro', label: 'Financeiro', short: 'Fin' },
   { to: '/equipe', label: 'Equipe', short: 'Team' },
@@ -229,7 +230,7 @@ export function navItemsForRole(role: MembershipRole | undefined | null): NavIte
 
 export function bottomNavForRole(role: MembershipRole | undefined | null): NavItem[] {
   const items = navItemsForRole(role)
-  const preferred = ['/', '/projetos', '/crm', '/relatorios', '/configuracoes']
+  const preferred = ['/', '/tarefas', '/crm', '/relatorios', '/configuracoes']
   const picked: NavItem[] = []
   for (const to of preferred) {
     const found = items.find((i) => i.to === to)

@@ -4,16 +4,26 @@ import type { Operation } from '@/types/database'
 
 /**
  * Calendário mensal de postagens aprovadas/publicadas — usa `operations`
- * (deadline + status) que já existe no sistema. Não depende de nenhuma API
- * externa; é a fonte de verdade interna enquanto a integração real com a API
- * do Meta não é aprovada (App Review + verificação de negócio, fora do
- * controle do TettoFlow).
+ * (deadline + status). Clique abre o painel de edição/download no Conteúdo.
  */
-export function PostCalendar({ operations }: { operations: Operation[] }) {
+export function PostCalendar({
+  operations,
+  onSelect,
+  selectedId,
+}: {
+  operations: Operation[]
+  onSelect?: (op: Operation) => void
+  selectedId?: string | null
+}) {
   const scheduled = useMemo(
     () =>
       operations.filter(
-        (op) => op.deadline && (op.status === 'APPROVED' || op.status === 'PUBLISHED'),
+        (op) =>
+          op.deadline &&
+          (op.status === 'APPROVED' ||
+            op.status === 'PUBLISHED' ||
+            op.status === 'REVIEW' ||
+            op.status === 'CLIENT'),
       ),
     [operations],
   )
@@ -26,25 +36,30 @@ export function PostCalendar({ operations }: { operations: Operation[] }) {
         getKey={(op) => op.id}
         getDate={(op) => op.deadline}
         renderItem={(op) => (
-          <p
-            title={`${op.title} — ${op.clients?.name ?? ''}`}
-            className={`truncate rounded px-1 text-[10px] ${
-              op.status === 'PUBLISHED'
-                ? 'bg-sky-500/15 text-sky-300'
-                : 'bg-emerald-500/15 text-emerald-300'
+          <button
+            type="button"
+            onClick={() => onSelect?.(op)}
+            title={`${op.title} — ${op.clients?.name ?? ''} · clique para editar/baixar`}
+            className={`flex w-full truncate rounded px-1 text-left text-[10px] transition ${
+              selectedId === op.id
+                ? 'ring-1 ring-emerald-400/60 bg-emerald-500/25 text-emerald-200'
+                : op.status === 'PUBLISHED'
+                  ? 'bg-sky-500/15 text-sky-300 hover:bg-sky-500/25'
+                  : 'bg-emerald-500/15 text-emerald-300 hover:bg-emerald-500/25'
             }`}
           >
             {op.clients?.name ?? op.title}
-          </p>
+          </button>
         )}
         legend={
-          <div className="flex gap-3 text-[11px] text-slate-500">
+          <div className="flex flex-wrap gap-3 text-[11px] text-slate-500">
             <span className="flex items-center gap-1">
-              <span className="h-2 w-2 rounded-full bg-emerald-400" /> Aprovado
+              <span className="h-2 w-2 rounded-full bg-emerald-400" /> Aprovado / em revisão
             </span>
             <span className="flex items-center gap-1">
               <span className="h-2 w-2 rounded-full bg-sky-400" /> Publicado
             </span>
+            <span>Clique no item para editar data ou baixar o post</span>
           </div>
         }
       />

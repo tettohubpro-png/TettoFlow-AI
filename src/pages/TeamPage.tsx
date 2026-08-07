@@ -16,7 +16,7 @@ import { createTeamMember, deleteTeamMember, updateTeamMemberRole } from '@/serv
 
 export function TeamPage() {
   const { role, user } = useAuth()
-  const { members, loading, refresh } = useTeamMembers()
+  const { members, loading, error: loadError, refresh } = useTeamMembers()
   const { assignments, loading: loadingAssign } = useClientAssignments()
   const [savingId, setSavingId] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -119,9 +119,9 @@ export function TeamPage() {
         </button>
       </header>
 
-      {error && (
+      {(error || loadError) && (
         <p className="mb-3 text-sm" style={{ color: 'var(--color-danger)' }}>
-          {error}
+          {error || loadError}
         </p>
       )}
 

@@ -18,7 +18,6 @@ import { AiPage } from '@/pages/AiPage'
 import { WhatsAppPage } from '@/pages/WhatsAppPage'
 import { InboxPage } from '@/pages/InboxPage'
 import { FinancePage } from '@/pages/FinancePage'
-import { TasksPage } from '@/pages/TasksPage'
 import { AlertsPage } from '@/pages/AlertsPage'
 import { ReportsPage } from '@/pages/ReportsPage'
 import { SettingsPage } from '@/pages/SettingsPage'
@@ -43,7 +42,7 @@ export default function App() {
             <Route path="conteudo" element={<ContentPage />} />
             <Route path="agenda" element={<AgendaPage />} />
             <Route path="equipe" element={<TeamPage />} />
-            <Route path="projetos" element={<ProjectsPage />} />
+            <Route path="projetos" element={<Navigate to="/tarefas" replace />} />
             <Route path="departamentos" element={<DepartmentsPage />} />
             <Route path="aprovacoes" element={<ApprovalsPage />} />
             <Route path="alertas" element={<AlertsPage />} />
@@ -52,7 +51,7 @@ export default function App() {
             <Route path="whatsapp" element={<WhatsAppPage />} />
             <Route path="mensagens" element={<InboxPage />} />
             <Route path="financeiro" element={<FinancePage />} />
-            <Route path="tarefas" element={<TasksPage />} />
+            <Route path="tarefas" element={<ProjectsPage />} />
             <Route path="indique" element={<ReferralPage />} />
             <Route path="novidades" element={<ChangelogPage />} />
             <Route path="suporte" element={<SupportPage />} />

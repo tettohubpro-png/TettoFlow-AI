@@ -1,9 +1,9 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import type { DragEvent } from 'react'
-import { LayoutGrid, Table2, CalendarDays } from 'lucide-react'
+import { useSearchParams, Link } from 'react-router-dom'
+import { LayoutGrid, Table2 } from 'lucide-react'
 import { OperationCard } from '@/components/operations/OperationCard'
 import { OperationModal } from '@/components/operations/OperationModal'
-import { MonthCalendar } from '@/components/ui/MonthCalendar'
 import { useOperations, type OperationDetails } from '@/hooks/useOperations'
 import { useClients } from '@/hooks/useClients'
 import { useApprovals } from '@/hooks/useApprovals'
@@ -21,7 +21,7 @@ import {
 import type { OperationFormData } from '@/utils/operationExtras'
 import type { Operation, OperationStatus } from '@/types/database'
 
-type ViewMode = 'kanban' | 'tabela' | 'calendario'
+type ViewMode = 'kanban' | 'tabela'
 
 const STATUS_DOT: Record<OperationStatus, string> = {
   DRAFT: 'bg-slate-500',
@@ -64,6 +64,7 @@ export function ProjectsPage() {
   const [movingId, setMovingId] = useState<string | null>(null)
   const [viewMode, setViewMode] = useState<ViewMode>('kanban')
   const [clientFilter, setClientFilter] = useState('')
+  const [searchParams, setSearchParams] = useSearchParams()
 
   const filteredOperations = clientFilter
     ? operations.filter((op) => op.client_id === clientFilter)
@@ -101,6 +102,18 @@ export function ProjectsPage() {
       setEditOpen(true)
     }
   }
+
+  useEffect(() => {
+    const opId = searchParams.get('op')
+    if (!opId || loading) return
+    void (async () => {
+      await openEdit(opId)
+      const next = new URLSearchParams(searchParams)
+      next.delete('op')
+      setSearchParams(next, { replace: true })
+    })()
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- deep-link once
+  }, [loading, searchParams.get('op')])
 
   const advance = async (operationId: string, current: OperationStatus) => {
     const next = nextOperationStatus(current) as OperationStatus | null
@@ -155,7 +168,10 @@ export function ProjectsPage() {
         <div>
           <h2 className="text-xl font-bold sm:text-2xl">Tarefas</h2>
           <p className="text-sm text-slate-400">
-            Pipeline de produção — arraste os cards entre as colunas
+            Kanban e tabela do pipeline — calendário editorial fica em{' '}
+            <Link to="/conteudo" className="text-emerald-400 hover:underline">
+              Conteúdo
+            </Link>
           </p>
         </div>
         {canOperate && (
@@ -175,7 +191,6 @@ export function ProjectsPage() {
             [
               { key: 'kanban', label: 'Kanban', icon: LayoutGrid },
               { key: 'tabela', label: 'Tabela', icon: Table2 },
-              { key: 'calendario', label: 'Calendário', icon: CalendarDays },
             ] as const
           ).map(({ key, label, icon: Icon }) => (
             <button
@@ -214,8 +229,6 @@ export function ProjectsPage() {
           members={members}
           onEdit={openEdit}
         />
-      ) : viewMode === 'calendario' ? (
-        <CalendarView operations={filteredOperations} onEdit={openEdit} />
       ) : (
         <div
           className="-mx-3 flex gap-3 overflow-x-auto px-3 pb-2 sm:mx-0 sm:grid sm:grid-cols-2 sm:overflow-visible sm:px-0 lg:grid-cols-3 xl:grid-cols-5"
@@ -361,37 +374,5 @@ function TableView({
         </tbody>
       </table>
     </div>
-  )
-}
-
-function CalendarView({
-  operations,
-  onEdit,
-}: {
-  operations: Operation[]
-  onEdit: (id: string) => void
-}) {
-  const withDeadline = operations.filter((op) => op.deadline)
-
-  return (
-    <section className="rounded-xl border border-slate-800 bg-slate-900/40 p-4 sm:p-5">
-      <MonthCalendar
-        items={withDeadline}
-        getKey={(op) => op.id}
-        getDate={(op) => op.deadline}
-        maxPerDay={3}
-        renderItem={(op) => (
-          <button
-            type="button"
-            onClick={() => onEdit(op.id)}
-            title={`${op.title} — ${op.clients?.name ?? ''}`}
-            className="flex w-full items-center gap-1 truncate rounded bg-slate-800/80 px-1 text-left text-[10px] text-slate-300 hover:bg-slate-700"
-          >
-            <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${STATUS_DOT[op.status]}`} />
-            <span className="truncate">{op.clients?.name ?? op.title}</span>
-          </button>
-        )}
-      />
-    </section>
   )
 }

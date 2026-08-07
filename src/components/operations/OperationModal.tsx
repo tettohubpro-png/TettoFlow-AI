@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
 import type { OperationDetails } from '@/hooks/useOperations'
+import { useOperationComments } from '@/hooks/useOperationComments'
 import type { ClientFile } from '@/types/database'
 import {
   LABEL_PRESETS,
@@ -463,6 +464,8 @@ export function OperationModal({
             </section>
           )}
 
+          {mode === 'edit' && initial?.id && <CommentsSection operationId={initial.id} />}
+
           {error && <p className="mb-3 text-sm text-red-400">{error}</p>}
 
           <div className="flex gap-2 border-t border-slate-800 pt-4">
@@ -484,5 +487,69 @@ export function OperationModal({
         </form>
       </div>
     </div>
+  )
+}
+
+function CommentsSection({ operationId }: { operationId: string }) {
+  const { comments, loading, addComment } = useOperationComments(operationId)
+  const [text, setText] = useState('')
+  const [sending, setSending] = useState(false)
+
+  const handleAdd = async () => {
+    if (!text.trim()) return
+    setSending(true)
+    await addComment(text)
+    setText('')
+    setSending(false)
+  }
+
+  return (
+    <section className="mb-4 rounded-xl border border-slate-800 bg-slate-950/40 p-3">
+      <h4 className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
+        Sugestões
+      </h4>
+      {loading && <p className="text-xs text-slate-600">Carregando...</p>}
+      {!loading && comments.length === 0 && (
+        <p className="text-xs text-slate-600">Nenhuma sugestão ainda.</p>
+      )}
+      <ul className="mb-2 space-y-2">
+        {comments.map((c) => (
+          <li key={c.id} className="rounded-lg bg-slate-900/60 px-3 py-2 text-sm">
+            <p className="text-slate-200">{c.content}</p>
+            <p className="mt-1 text-[11px] text-slate-500">
+              {c.users?.name ?? 'Alguém'} ·{' '}
+              {new Date(c.created_at).toLocaleString('pt-BR', {
+                day: '2-digit',
+                month: '2-digit',
+                hour: '2-digit',
+                minute: '2-digit',
+              })}
+            </p>
+          </li>
+        ))}
+      </ul>
+      <div className="flex gap-2">
+        <input
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') {
+              e.preventDefault()
+              handleAdd()
+            }
+          }}
+          placeholder="Deixe uma sugestão pra equipe..."
+          className="min-h-10 flex-1 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm"
+        />
+        <button
+          type="button"
+          onClick={handleAdd}
+          disabled={sending || !text.trim()}
+          className="min-h-10 rounded-lg bg-emerald-600/20 px-3 text-sm text-emerald-300 disabled:opacity-50"
+        >
+          Enviar
+        </button>
+      </div>
+    </section>
   )
 }

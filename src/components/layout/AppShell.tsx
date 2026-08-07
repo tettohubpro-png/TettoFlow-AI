@@ -8,6 +8,7 @@ const nav = [
   { to: '/crm', label: 'CRM', short: 'CRM' },
   { to: '/financeiro', label: 'Financeiro', short: 'Fin' },
   { to: '/projetos', label: 'Operações', short: 'Ops' },
+  { to: '/tarefas', label: 'Tarefas', short: 'Tasks' },
   { to: '/departamentos', label: 'Departamentos', short: 'Depts' },
   { to: '/aprovacoes', label: 'Aprovações', short: 'Aprov' },
   { to: '/alertas', label: 'Alertas', short: 'Alert' },

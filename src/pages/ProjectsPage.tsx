@@ -1,7 +1,9 @@
 import { useState } from 'react'
 import type { DragEvent } from 'react'
+import { LayoutGrid, Table2, CalendarDays } from 'lucide-react'
 import { OperationCard } from '@/components/operations/OperationCard'
 import { OperationModal } from '@/components/operations/OperationModal'
+import { MonthCalendar } from '@/components/ui/MonthCalendar'
 import { useOperations, type OperationDetails } from '@/hooks/useOperations'
 import { useClients } from '@/hooks/useClients'
 import { useApprovals } from '@/hooks/useApprovals'
@@ -10,12 +12,27 @@ import { useTeamMembers } from '@/hooks/useTeamMembers'
 import {
   OPERATION_STATUS_LABELS,
   OPERATION_STATUS_ORDER,
+  OPERATION_PRIORITY_LABELS,
   canDeleteOperations,
   nextOperationStatus,
   previousOperationStatus,
 } from '@/utils/permissions'
 import type { OperationFormData } from '@/utils/operationExtras'
-import type { OperationStatus } from '@/types/database'
+import type { Operation, OperationStatus } from '@/types/database'
+
+type ViewMode = 'kanban' | 'tabela' | 'calendario'
+
+const STATUS_DOT: Record<OperationStatus, string> = {
+  DRAFT: 'bg-slate-500',
+  SUBMITTED: 'bg-sky-400',
+  ANALYSIS: 'bg-sky-400',
+  PRODUCTION: 'bg-amber-400',
+  REVIEW: 'bg-amber-400',
+  CLIENT: 'bg-violet-400',
+  APPROVED: 'bg-emerald-400',
+  PUBLISHED: 'bg-emerald-400',
+  DONE: 'bg-slate-600',
+}
 
 export function ProjectsPage() {
   const {
@@ -43,6 +60,7 @@ export function ProjectsPage() {
   const [draggingId, setDraggingId] = useState<string | null>(null)
   const [dragOverStatus, setDragOverStatus] = useState<string | null>(null)
   const [movingId, setMovingId] = useState<string | null>(null)
+  const [viewMode, setViewMode] = useState<ViewMode>('kanban')
 
   const handleCreate = async (form: OperationFormData, files: File[]) => {
     const { data, error } = await createOperation(form)
@@ -139,8 +157,39 @@ export function ProjectsPage() {
         </button>
       </header>
 
+      <div className="mb-4 flex gap-1 border-b border-slate-800">
+        {(
+          [
+            { key: 'kanban', label: 'Kanban', icon: LayoutGrid },
+            { key: 'tabela', label: 'Tabela', icon: Table2 },
+            { key: 'calendario', label: 'Calendário', icon: CalendarDays },
+          ] as const
+        ).map(({ key, label, icon: Icon }) => (
+          <button
+            key={key}
+            type="button"
+            onClick={() => setViewMode(key)}
+            className={`flex min-h-10 items-center gap-1.5 rounded-t-lg px-3 text-sm ${
+              viewMode === key
+                ? 'bg-emerald-500/20 font-medium text-emerald-300'
+                : 'text-slate-400 hover:text-slate-200'
+            }`}
+          >
+            <Icon size={14} /> {label}
+          </button>
+        ))}
+      </div>
+
       {loading ? (
         <p className="text-slate-500">Carregando...</p>
+      ) : viewMode === 'tabela' ? (
+        <TableView
+          operations={operations}
+          members={members}
+          onEdit={openEdit}
+        />
+      ) : viewMode === 'calendario' ? (
+        <CalendarView operations={operations} onEdit={openEdit} />
       ) : (
         <div
           className="-mx-3 flex gap-3 overflow-x-auto px-3 pb-2 sm:mx-0 sm:grid sm:grid-cols-2 sm:overflow-visible sm:px-0 lg:grid-cols-3 xl:grid-cols-5"
@@ -227,5 +276,96 @@ export function ProjectsPage() {
         onSubmit={handleUpdate}
       />
     </div>
+  )
+}
+
+function TableView({
+  operations,
+  members,
+  onEdit,
+}: {
+  operations: Operation[]
+  members: { user_id: string; user: { name: string } }[]
+  onEdit: (id: string) => void
+}) {
+  if (operations.length === 0) {
+    return <p className="text-slate-500">Nenhuma operação ainda.</p>
+  }
+
+  return (
+    <div className="overflow-x-auto rounded-xl border border-slate-800">
+      <table className="w-full min-w-[720px] text-left text-sm">
+        <thead className="bg-slate-900 text-slate-400">
+          <tr>
+            <th className="px-4 py-3">Título</th>
+            <th className="px-4 py-3">Cliente</th>
+            <th className="px-4 py-3">Status</th>
+            <th className="px-4 py-3">Prioridade</th>
+            <th className="px-4 py-3">Prazo</th>
+            <th className="px-4 py-3">Responsável</th>
+          </tr>
+        </thead>
+        <tbody>
+          {operations.map((op) => {
+            const responsible = members.find((m) => m.user_id === op.responsible_id)
+            return (
+              <tr
+                key={op.id}
+                onClick={() => onEdit(op.id)}
+                className="cursor-pointer border-t border-slate-800 hover:bg-slate-900/60"
+              >
+                <td className="px-4 py-3 font-medium">{op.title}</td>
+                <td className="px-4 py-3 text-slate-400">{op.clients?.name ?? '—'}</td>
+                <td className="px-4 py-3">
+                  <span className="flex items-center gap-1.5">
+                    <span className={`h-2 w-2 rounded-full ${STATUS_DOT[op.status]}`} />
+                    {OPERATION_STATUS_LABELS[op.status]}
+                  </span>
+                </td>
+                <td className="px-4 py-3 text-slate-400">
+                  {OPERATION_PRIORITY_LABELS[op.priority]}
+                </td>
+                <td className="px-4 py-3 text-slate-400">
+                  {op.deadline ? new Date(op.deadline).toLocaleDateString('pt-BR') : '—'}
+                </td>
+                <td className="px-4 py-3 text-slate-400">{responsible?.user.name ?? '—'}</td>
+              </tr>
+            )
+          })}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
+function CalendarView({
+  operations,
+  onEdit,
+}: {
+  operations: Operation[]
+  onEdit: (id: string) => void
+}) {
+  const withDeadline = operations.filter((op) => op.deadline)
+
+  return (
+    <section className="rounded-xl border border-slate-800 bg-slate-900/40 p-4 sm:p-5">
+      <MonthCalendar
+        items={withDeadline}
+        getKey={(op) => op.id}
+        getDate={(op) => op.deadline}
+        maxPerDay={3}
+        renderItem={(op) => (
+          <button
+            type="button"
+            onClick={() => onEdit(op.id)}
+            title={`${op.title} — ${op.clients?.name ?? ''}`}
+            className="flex w-full items-center gap-1 truncate rounded bg-slate-800/80 px-1 text-left text-[10px] text-slate-300 hover:bg-slate-700"
+          >
+            <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${STATUS_DOT[op.status]}`} />
+            <span className="truncate">{op.clients?.name ?? op.title}</span>
+          </button>
+        )}
+      />
+    </section>
   )
 }

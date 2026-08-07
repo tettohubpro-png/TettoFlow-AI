@@ -12,6 +12,7 @@ import { AiPage } from '@/pages/AiPage'
 import { WhatsAppPage } from '@/pages/WhatsAppPage'
 import { InboxPage } from '@/pages/InboxPage'
 import { FinancePage } from '@/pages/FinancePage'
+import { TasksPage } from '@/pages/TasksPage'
 import { AlertsPage } from '@/pages/AlertsPage'
 import { ReportsPage } from '@/pages/ReportsPage'
 
@@ -34,6 +35,7 @@ export default function App() {
             <Route path="whatsapp" element={<WhatsAppPage />} />
             <Route path="mensagens" element={<InboxPage />} />
             <Route path="financeiro" element={<FinancePage />} />
+            <Route path="tarefas" element={<TasksPage />} />
           </Route>
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>

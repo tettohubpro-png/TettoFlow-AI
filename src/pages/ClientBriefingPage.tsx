@@ -6,12 +6,18 @@ import { useClientBriefing } from '@/hooks/useClientBriefing'
 import { useDriveUpload } from '@/hooks/useDriveUpload'
 import { useFiles } from '@/hooks/useFiles'
 import { useClientContracts } from '@/hooks/useClientContracts'
+import { useOperations } from '@/hooks/useOperations'
 import { DriveDropzone } from '@/components/files/DriveDropzone'
-import { canEditBriefing, canUploadRecordings } from '@/utils/permissions'
+import {
+  CLIENT_STATUS_LABELS,
+  OPERATION_STATUS_ORDER,
+  canEditBriefing,
+  canUploadRecordings,
+} from '@/utils/permissions'
 import { buildDriveFolderName } from '@/utils/driveFolder'
 import type { BriefingFormData, ContractPeriodicity } from '@/types/database'
 
-type Tab = 'briefing' | 'gravacoes' | 'contrato'
+type Tab = 'briefing' | 'gravacoes' | 'contrato' | 'visualizacao'
 
 function formHasContent(form: BriefingFormData) {
   return Object.values(form).some((v) => String(v).trim().length > 0)
@@ -167,6 +173,17 @@ export function ClientBriefingPage() {
           }`}
         >
           Contrato
+        </button>
+        <button
+          type="button"
+          onClick={() => setTab('visualizacao')}
+          className={`min-h-11 flex-1 rounded-lg px-4 py-2.5 text-sm sm:flex-none ${
+            tab === 'visualizacao'
+              ? 'bg-emerald-500/20 font-medium text-emerald-300'
+              : 'bg-slate-900 text-slate-400'
+          }`}
+        >
+          Visualização
         </button>
       </div>
 
@@ -427,6 +444,75 @@ export function ClientBriefingPage() {
       )}
 
       {tab === 'contrato' && <ContractsTab clientId={clientId} canEdit={canEdit} />}
+
+      {tab === 'visualizacao' && (
+        <VisualizacaoTab
+          clientId={clientId}
+          clientName={client?.name ?? ''}
+          clientStatus={client?.status}
+          logoUrl={form.logo_url}
+        />
+      )}
+    </div>
+  )
+}
+
+function VisualizacaoTab({
+  clientId,
+  clientName,
+  clientStatus,
+  logoUrl,
+}: {
+  clientId: string | undefined
+  clientName: string
+  clientStatus: string | undefined
+  logoUrl: string
+}) {
+  const { operations } = useOperations(clientId)
+
+  const counts = OPERATION_STATUS_ORDER.reduce<Record<string, number>>((acc, status) => {
+    acc[status] = operations.filter((op) => op.status === status).length
+    return acc
+  }, {})
+
+  return (
+    <div className="space-y-6">
+      <section className="rounded-xl border border-slate-800 bg-slate-900/40 p-5">
+        <h3 className="font-semibold text-slate-300">Controle de visibilidade</h3>
+        <p className="mt-2 text-sm text-slate-500">
+          Por padrão, todos os membros do workspace com acesso ao CRM veem este cliente.
+          Restringir a visibilidade a membros específicos depende da hierarquia de papéis
+          (proprietário/gerente/funcionário/estagiário) — ainda não implementada neste
+          sistema. Assim que existir, esse controle aparece aqui.
+        </p>
+      </section>
+
+      <section className="rounded-xl border border-slate-800 bg-slate-900/40 p-5">
+        <h3 className="mb-3 font-semibold text-slate-300">Prévia do cartão</h3>
+        <div className="max-w-xs overflow-hidden rounded-xl border border-slate-800">
+          <div className="flex h-20 items-center justify-center bg-slate-800">
+            {logoUrl ? (
+              <img src={logoUrl} alt={clientName} className="h-full w-full object-cover" />
+            ) : (
+              <span className="text-3xl">🏢</span>
+            )}
+          </div>
+          <div className="bg-slate-950/60 p-3">
+            <div className="flex items-center justify-between gap-2">
+              <p className="font-semibold">{clientName || 'Nome do Cliente'}</p>
+              <span className="shrink-0 rounded-full bg-violet-500/15 px-2 py-0.5 text-xs text-violet-300">
+                {clientStatus ? (CLIENT_STATUS_LABELS[clientStatus] ?? clientStatus) : '—'}
+              </span>
+            </div>
+            <div className="mt-2 grid grid-cols-2 gap-1 text-xs text-slate-500">
+              <span>{counts.DRAFT ?? 0} rascunho</span>
+              <span>{counts.REVIEW ?? 0} em revisão</span>
+              <span>{(counts.APPROVED ?? 0) + (counts.PUBLISHED ?? 0)} aprovados</span>
+              <span>{counts.DONE ?? 0} concluídos</span>
+            </div>
+          </div>
+        </div>
+      </section>
     </div>
   )
 }

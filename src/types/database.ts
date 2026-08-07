@@ -161,6 +161,9 @@ export interface DashboardStats {
   todayAgenda: number
   newLeadsWeek: number
   messagesWeek: number
+  contentThisMonth: number
+  tasksPending: number
+  revenueMonth: number
 }
 
 /** @deprecated Use AppUser + Membership */

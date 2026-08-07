@@ -12,6 +12,9 @@ export function useDashboardStats() {
     todayAgenda: 0,
     newLeadsWeek: 0,
     messagesWeek: 0,
+    contentThisMonth: 0,
+    tasksPending: 0,
+    revenueMonth: 0,
   })
   const [loading, setLoading] = useState(true)
 
@@ -24,8 +27,19 @@ export function useDashboardStats() {
     setLoading(true)
     const today = new Date().toISOString().slice(0, 10)
     const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString()
+    const monthStart = `${today.slice(0, 7)}-01`
 
-    const [clientsRes, opsRes, reviewRes, todayRes, leadsRes, messagesRes] = await Promise.all([
+    const [
+      clientsRes,
+      opsRes,
+      reviewRes,
+      todayRes,
+      leadsRes,
+      messagesRes,
+      contentMonthRes,
+      tasksRes,
+      revenueRes,
+    ] = await Promise.all([
       supabase
         .from('clients')
         .select('id', { count: 'exact', head: true })
@@ -62,7 +76,34 @@ export function useDashboardStats() {
         .eq('workspace_id', workspace.id)
         .eq('direction', 'inbound')
         .gte('created_at', weekAgo),
+      // Conteúdos criados neste mês.
+      supabase
+        .from('operations')
+        .select('id', { count: 'exact', head: true })
+        .eq('workspace_id', workspace.id)
+        .is('archived_at', null)
+        .gte('created_at', `${monthStart}T00:00:00`),
+      // Tarefas ainda não concluídas.
+      supabase
+        .from('tasks')
+        .select('id', { count: 'exact', head: true })
+        .eq('workspace_id', workspace.id)
+        .not('status', 'eq', 'done'),
+      // Receita prevista do mês (só retorna algo pra OWNER/ADMIN/MANAGER — RLS).
+      supabase
+        .from('financial_entries')
+        .select('amount')
+        .eq('workspace_id', workspace.id)
+        .eq('type', 'income')
+        .neq('status', 'cancelled')
+        .gte('due_date', monthStart)
+        .lt('due_date', nextMonthStart(monthStart)),
     ])
+
+    const revenueMonth = (revenueRes.data ?? []).reduce(
+      (sum, row) => sum + Number(row.amount ?? 0),
+      0,
+    )
 
     setStats({
       activeClients: clientsRes.count ?? 0,
@@ -71,6 +112,9 @@ export function useDashboardStats() {
       todayAgenda: todayRes.count ?? 0,
       newLeadsWeek: leadsRes.count ?? 0,
       messagesWeek: messagesRes.count ?? 0,
+      contentThisMonth: contentMonthRes.count ?? 0,
+      tasksPending: tasksRes.count ?? 0,
+      revenueMonth,
     })
     setLoading(false)
   }, [workspace?.id])
@@ -80,4 +124,10 @@ export function useDashboardStats() {
   }, [fetchStats])
 
   return { stats, loading, refresh: fetchStats }
+}
+
+function nextMonthStart(monthStartISODate: string): string {
+  const [year, month] = monthStartISODate.split('-').map(Number)
+  const next = new Date(year, month, 1) // month já é 1-based aqui (vira o mês seguinte)
+  return next.toISOString().slice(0, 10)
 }

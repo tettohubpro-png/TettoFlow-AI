@@ -61,6 +61,11 @@ export function ProjectsPage() {
   const [dragOverStatus, setDragOverStatus] = useState<string | null>(null)
   const [movingId, setMovingId] = useState<string | null>(null)
   const [viewMode, setViewMode] = useState<ViewMode>('kanban')
+  const [clientFilter, setClientFilter] = useState('')
+
+  const filteredOperations = clientFilter
+    ? operations.filter((op) => op.client_id === clientFilter)
+    : operations
 
   const handleCreate = async (form: OperationFormData, files: File[]) => {
     const { data, error } = await createOperation(form)
@@ -136,7 +141,7 @@ export function ProjectsPage() {
 
   const byStatus = OPERATION_STATUS_ORDER.map((status) => ({
     status,
-    items: operations.filter((op) => op.status === status),
+    items: filteredOperations.filter((op) => op.status === status),
   }))
 
   return (
@@ -157,39 +162,53 @@ export function ProjectsPage() {
         </button>
       </header>
 
-      <div className="mb-4 flex gap-1 border-b border-slate-800">
-        {(
-          [
-            { key: 'kanban', label: 'Kanban', icon: LayoutGrid },
-            { key: 'tabela', label: 'Tabela', icon: Table2 },
-            { key: 'calendario', label: 'Calendário', icon: CalendarDays },
-          ] as const
-        ).map(({ key, label, icon: Icon }) => (
-          <button
-            key={key}
-            type="button"
-            onClick={() => setViewMode(key)}
-            className={`flex min-h-10 items-center gap-1.5 rounded-t-lg px-3 text-sm ${
-              viewMode === key
-                ? 'bg-emerald-500/20 font-medium text-emerald-300'
-                : 'text-slate-400 hover:text-slate-200'
-            }`}
-          >
-            <Icon size={14} /> {label}
-          </button>
-        ))}
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-3 border-b border-slate-800 pb-0">
+        <div className="flex gap-1">
+          {(
+            [
+              { key: 'kanban', label: 'Kanban', icon: LayoutGrid },
+              { key: 'tabela', label: 'Tabela', icon: Table2 },
+              { key: 'calendario', label: 'Calendário', icon: CalendarDays },
+            ] as const
+          ).map(({ key, label, icon: Icon }) => (
+            <button
+              key={key}
+              type="button"
+              onClick={() => setViewMode(key)}
+              className={`flex min-h-10 items-center gap-1.5 rounded-t-lg px-3 text-sm ${
+                viewMode === key
+                  ? 'bg-emerald-500/20 font-medium text-emerald-300'
+                  : 'text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              <Icon size={14} /> {label}
+            </button>
+          ))}
+        </div>
+        <select
+          value={clientFilter}
+          onChange={(e) => setClientFilter(e.target.value)}
+          className="mb-2 min-h-9 rounded-lg border border-slate-700 bg-slate-950 px-2 text-sm text-slate-300"
+        >
+          <option value="">Todos os clientes</option>
+          {clients.map((c) => (
+            <option key={c.id} value={c.id}>
+              {c.name}
+            </option>
+          ))}
+        </select>
       </div>
 
       {loading ? (
         <p className="text-slate-500">Carregando...</p>
       ) : viewMode === 'tabela' ? (
         <TableView
-          operations={operations}
+          operations={filteredOperations}
           members={members}
           onEdit={openEdit}
         />
       ) : viewMode === 'calendario' ? (
-        <CalendarView operations={operations} onEdit={openEdit} />
+        <CalendarView operations={filteredOperations} onEdit={openEdit} />
       ) : (
         <div
           className="-mx-3 flex gap-3 overflow-x-auto px-3 pb-2 sm:mx-0 sm:grid sm:grid-cols-2 sm:overflow-visible sm:px-0 lg:grid-cols-3 xl:grid-cols-5"

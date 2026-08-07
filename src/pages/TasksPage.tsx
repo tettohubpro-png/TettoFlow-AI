@@ -24,7 +24,24 @@ const PRIORITY_DOT: Record<TaskPriority, string> = {
 }
 
 export function TasksPage() {
-  const { tasks, loading, createTask, updateStatus, deleteTask } = useTasks()
+  return (
+    <div>
+      <header className="mb-4 flex flex-col gap-3 sm:mb-6 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <h2 className="text-xl font-bold sm:text-2xl">Tarefas</h2>
+          <p className="text-sm text-slate-400">Quadro geral, fora de um projeto específico</p>
+        </div>
+      </header>
+      <TasksBoard />
+    </div>
+  )
+}
+
+/** Quadro de tarefas reutilizável — usado tanto em /tarefas quanto como aba
+ * dentro de Operações. */
+export function TasksBoard({ operationId }: { operationId?: string }) {
+  const { tasks: allTasks, loading, createTask, updateStatus, deleteTask } = useTasks()
+  const tasks = operationId ? allTasks.filter((t) => t.operation_id === operationId) : allTasks
   const { operations } = useOperations()
   const { members } = useTeamMembers()
   const [showForm, setShowForm] = useState(false)
@@ -72,13 +89,10 @@ export function TasksPage() {
 
   return (
     <div>
-      <header className="mb-4 flex flex-col gap-3 sm:mb-6 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <h2 className="text-xl font-bold sm:text-2xl">Tarefas</h2>
-          <p className="text-sm text-slate-400">
-            {tasks.length} tarefas · {tasks.filter((t) => t.status === 'done').length} concluídas
-          </p>
-        </div>
+      <div className="mb-4 flex flex-col gap-3 sm:mb-6 sm:flex-row sm:items-center sm:justify-between">
+        <p className="text-sm text-slate-400">
+          {tasks.length} tarefas · {tasks.filter((t) => t.status === 'done').length} concluídas
+        </p>
         <button
           type="button"
           onClick={() => setShowForm(!showForm)}
@@ -87,7 +101,7 @@ export function TasksPage() {
           {showForm ? <X size={16} /> : <Plus size={16} />}
           {showForm ? 'Cancelar' : 'Nova tarefa'}
         </button>
-      </header>
+      </div>
 
       {showForm && (
         <form

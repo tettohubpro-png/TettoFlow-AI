@@ -7,7 +7,7 @@ const nav = [
   { to: '/', label: 'Dashboard', short: 'Home', end: true },
   { to: '/crm', label: 'CRM', short: 'CRM' },
   { to: '/financeiro', label: 'Financeiro', short: 'Fin' },
-  { to: '/projetos', label: 'Operações', short: 'Ops' },
+  { to: '/projetos', label: 'Tarefas', short: 'Tasks' },
   { to: '/departamentos', label: 'Departamentos', short: 'Depts' },
   { to: '/aprovacoes', label: 'Aprovações', short: 'Aprov' },
   { to: '/alertas', label: 'Alertas', short: 'Alert' },
@@ -19,7 +19,7 @@ const nav = [
 
 const bottomNav = [
   { to: '/', label: 'Home', end: true },
-  { to: '/projetos', label: 'Ops' },
+  { to: '/projetos', label: 'Tarefas' },
   { to: '/departamentos', label: 'Depts' },
   { to: '/relatorios', label: 'Rel' },
   { to: '/alertas', label: 'Alert' },

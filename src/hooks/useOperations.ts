@@ -10,6 +10,10 @@ import {
   type OperationFormData,
 } from '@/utils/operationExtras'
 import { logProjectActivity } from '@/utils/activityLog'
+import {
+  OPERATION_FILES_BUCKET,
+  buildOperationStoragePath,
+} from '@/utils/fileView'
 
 export interface OperationCardMeta {
   operation_id: string
@@ -138,7 +142,27 @@ export function useOperations(clientId?: string) {
     if (!workspace?.id || !user?.id) return { error: 'Sessão inválida' }
 
     for (const file of files) {
-      const storagePath = `operations/${operationId}/${file.name}`
+      const storagePath = buildOperationStoragePath(
+        workspace.id,
+        clientId,
+        operationId,
+        file.name,
+      )
+
+      const { error: uploadError } = await supabase.storage
+        .from(OPERATION_FILES_BUCKET)
+        .upload(storagePath, file, {
+          cacheControl: '3600',
+          upsert: false,
+          contentType: file.type || undefined,
+        })
+
+      if (uploadError) {
+        return {
+          error: `Falha no upload de ${file.name}: ${uploadError.message}`,
+        }
+      }
+
       const { error } = await supabase.from('files').insert({
         workspace_id: workspace.id,
         client_id: clientId,

@@ -10,6 +10,7 @@ import {
   type OperationFormData,
   type OperationLabel,
 } from '@/utils/operationExtras'
+import { openClientFile } from '@/utils/fileView'
 
 type SectionKey = 'labels' | 'dates' | 'checklist' | 'attachments' | 'custom_fields'
 
@@ -37,7 +38,16 @@ export function OperationModal({
   const [existingFiles, setExistingFiles] = useState<ClientFile[]>([])
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [openingFileId, setOpeningFileId] = useState<string | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
+
+  const handleOpenFile = async (file: ClientFile) => {
+    setOpeningFileId(file.id)
+    setError(null)
+    const result = await openClientFile(file)
+    setOpeningFileId(null)
+    if (result.error) setError(result.error)
+  }
 
   useEffect(() => {
     if (!open) return
@@ -363,9 +373,22 @@ export function OperationModal({
                 Anexos
               </h4>
               {existingFiles.length > 0 && (
-                <ul className="mb-2 space-y-1 text-sm text-slate-400">
+                <ul className="mb-2 space-y-1 text-sm">
                   {existingFiles.map((f) => (
-                    <li key={f.id}>📎 {f.name}</li>
+                    <li key={f.id}>
+                      <button
+                        type="button"
+                        onClick={() => handleOpenFile(f)}
+                        disabled={openingFileId === f.id}
+                        className="inline-flex max-w-full items-center gap-1.5 rounded-md px-1 py-0.5 text-left text-sky-400 underline-offset-2 hover:text-sky-300 hover:underline disabled:opacity-60"
+                        title="Abrir anexo"
+                      >
+                        <span aria-hidden>📎</span>
+                        <span className="truncate">
+                          {openingFileId === f.id ? 'Abrindo…' : f.name}
+                        </span>
+                      </button>
+                    </li>
                   ))}
                 </ul>
               )}

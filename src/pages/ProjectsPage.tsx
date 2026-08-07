@@ -1,10 +1,9 @@
 import { useState } from 'react'
 import type { DragEvent } from 'react'
-import { LayoutGrid, Table2, CalendarDays, CheckSquare } from 'lucide-react'
+import { LayoutGrid, Table2, CalendarDays } from 'lucide-react'
 import { OperationCard } from '@/components/operations/OperationCard'
 import { OperationModal } from '@/components/operations/OperationModal'
 import { MonthCalendar } from '@/components/ui/MonthCalendar'
-import { TasksBoard } from '@/pages/TasksPage'
 import { useOperations, type OperationDetails } from '@/hooks/useOperations'
 import { useClients } from '@/hooks/useClients'
 import { useApprovals } from '@/hooks/useApprovals'
@@ -21,7 +20,7 @@ import {
 import type { OperationFormData } from '@/utils/operationExtras'
 import type { Operation, OperationStatus } from '@/types/database'
 
-type ViewMode = 'kanban' | 'tabela' | 'calendario' | 'tarefas'
+type ViewMode = 'kanban' | 'tabela' | 'calendario'
 
 const STATUS_DOT: Record<OperationStatus, string> = {
   DRAFT: 'bg-slate-500',
@@ -149,7 +148,7 @@ export function ProjectsPage() {
     <div>
       <header className="mb-4 flex flex-col gap-3 sm:mb-6 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h2 className="text-xl font-bold sm:text-2xl">Operações</h2>
+          <h2 className="text-xl font-bold sm:text-2xl">Tarefas</h2>
           <p className="text-sm text-slate-400">
             Pipeline de produção — arraste os cards entre as colunas
           </p>
@@ -170,7 +169,6 @@ export function ProjectsPage() {
               { key: 'kanban', label: 'Kanban', icon: LayoutGrid },
               { key: 'tabela', label: 'Tabela', icon: Table2 },
               { key: 'calendario', label: 'Calendário', icon: CalendarDays },
-              { key: 'tarefas', label: 'Tarefas', icon: CheckSquare },
             ] as const
           ).map(({ key, label, icon: Icon }) => (
             <button
@@ -211,8 +209,6 @@ export function ProjectsPage() {
         />
       ) : viewMode === 'calendario' ? (
         <CalendarView operations={filteredOperations} onEdit={openEdit} />
-      ) : viewMode === 'tarefas' ? (
-        <TasksBoard />
       ) : (
         <div
           className="-mx-3 flex gap-3 overflow-x-auto px-3 pb-2 sm:mx-0 sm:grid sm:grid-cols-2 sm:overflow-visible sm:px-0 lg:grid-cols-3 xl:grid-cols-5"

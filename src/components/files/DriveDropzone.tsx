@@ -116,25 +116,37 @@ export function DriveDropzone({
           {progress.map((p) => (
             <li
               key={p.fileName + p.status}
-              className="flex items-center justify-between rounded-lg bg-slate-950/60 px-3 py-2"
+              className="flex flex-col gap-2 rounded-lg bg-slate-950/60 px-3 py-2 sm:flex-row sm:items-center sm:justify-between"
             >
               <span className="truncate">{p.fileName}</span>
-              <span
-                className={
-                  p.status === 'done'
-                    ? 'text-emerald-400'
-                    : p.status === 'error'
-                      ? 'text-red-400'
-                      : p.status === 'skipped'
-                        ? 'text-amber-400'
-                        : 'text-slate-400'
-                }
-              >
-                {p.status === 'uploading' && 'Enviando...'}
-                {p.status === 'done' && (p.driveUrl ? 'OK' : 'Salvo')}
-                {p.status === 'error' && (p.message ?? 'Erro')}
-                {p.status === 'skipped' && (p.message ?? 'Pendente Drive')}
-              </span>
+              <div className="flex shrink-0 items-center gap-2">
+                <span
+                  className={
+                    p.status === 'done'
+                      ? 'text-emerald-400'
+                      : p.status === 'error'
+                        ? 'text-red-400'
+                        : p.status === 'skipped'
+                          ? 'text-amber-400'
+                          : 'text-slate-400'
+                  }
+                >
+                  {p.status === 'uploading' && 'Enviando...'}
+                  {p.status === 'done' && (p.driveUrl ? 'OK' : 'Salvo')}
+                  {p.status === 'error' && (p.message ?? 'Erro')}
+                  {p.status === 'skipped' && (p.message ?? 'Pendente Drive')}
+                </span>
+                {p.driveUrl && (
+                  <a
+                    href={p.driveUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="inline-flex min-h-9 items-center rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-emerald-500"
+                  >
+                    Abrir ↗
+                  </a>
+                )}
+              </div>
             </li>
           ))}
         </ul>

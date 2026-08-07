@@ -59,7 +59,7 @@ export function WhatsAppPage() {
       <header className="mb-6">
         <h2 className="text-2xl font-bold">WhatsApp IA</h2>
         <p className="text-slate-400">
-          Simulador com contexto real — Evolution API + n8n em produção
+          Simulador com contexto real — em produção fala direto com a Evolution API
         </p>
       </header>
 
@@ -85,9 +85,9 @@ export function WhatsAppPage() {
             <h3 className="font-semibold text-emerald-300">Fluxo produção</h3>
             <ol className="mt-3 list-decimal space-y-1 pl-4 text-slate-400">
               <li>Evolution API recebe mensagem</li>
-              <li>n8n → <code className="text-emerald-400">whatsapp-webhook</code></li>
+              <li>Webhook → <code className="text-emerald-400">agent-whatsapp</code></li>
               <li>Handoff OAB/ANVISA/TSE</li>
-              <li>Resposta com <code>client_ai_memory</code></li>
+              <li>Resposta via Evolution + <code>client_ai_memory</code></li>
             </ol>
             <p className="mt-3 text-xs text-slate-600">
               Memórias carregadas: {memories.length}

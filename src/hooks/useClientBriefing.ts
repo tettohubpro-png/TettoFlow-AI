@@ -40,13 +40,13 @@ export function useClientBriefing(clientId: string | undefined) {
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (opts?: { silent?: boolean }) => {
     if (!clientId || !workspace?.id) {
       setLoading(false)
       return
     }
 
-    setLoading(true)
+    if (!opts?.silent) setLoading(true)
     setError(null)
 
     const [clientRes, brandRes, productsRes, memoryRes, markerRes] =
@@ -220,8 +220,8 @@ export function useClientBriefing(clientId: string | undefined) {
         if (prodErr) throw new Error(prodErr.message)
       }
 
+      await load({ silent: true })
       setSaving(false)
-      await load()
       return { error: null }
     } catch (err) {
       const msg = String(err)
@@ -230,6 +230,8 @@ export function useClientBriefing(clientId: string | undefined) {
       return { error: msg }
     }
   }
+
+  const refresh = useCallback(() => load({ silent: true }), [load])
 
   return {
     client,
@@ -240,6 +242,6 @@ export function useClientBriefing(clientId: string | undefined) {
     saving,
     error,
     saveBriefing,
-    refresh: load,
+    refresh,
   }
 }

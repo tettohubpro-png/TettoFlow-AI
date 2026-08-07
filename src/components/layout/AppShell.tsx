@@ -6,6 +6,7 @@ import { ROLE_LABELS } from '@/utils/permissions'
 const nav = [
   { to: '/', label: 'Dashboard', short: 'Home', end: true },
   { to: '/crm', label: 'CRM', short: 'CRM' },
+  { to: '/financeiro', label: 'Financeiro', short: 'Fin' },
   { to: '/projetos', label: 'Operações', short: 'Ops' },
   { to: '/departamentos', label: 'Departamentos', short: 'Depts' },
   { to: '/aprovacoes', label: 'Aprovações', short: 'Aprov' },
@@ -13,6 +14,7 @@ const nav = [
   { to: '/relatorios', label: 'Relatórios', short: 'Rel' },
   { to: '/ia', label: 'IA', short: 'IA' },
   { to: '/whatsapp', label: 'WhatsApp IA', short: 'Zap' },
+  { to: '/mensagens', label: 'Mensagens', short: 'Msgs' },
 ]
 
 const bottomNav = [

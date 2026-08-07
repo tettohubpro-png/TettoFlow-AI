@@ -1,4 +1,5 @@
 import { StatCard } from '@/components/ui/StatCard'
+import { PostCalendar } from '@/components/dashboard/PostCalendar'
 import { useDashboardStats } from '@/hooks/useDashboard'
 import { useOperations } from '@/hooks/useOperations'
 import { OPERATION_STATUS_LABELS } from '@/utils/permissions'
@@ -37,6 +38,20 @@ export function DashboardPage() {
           value={loading ? '—' : stats.todayAgenda}
           accent="text-violet-400"
         />
+        <StatCard
+          label="Novos leads (7 dias)"
+          value={loading ? '—' : stats.newLeadsWeek}
+          accent="text-fuchsia-400"
+        />
+        <StatCard
+          label="Mensagens recebidas (7 dias)"
+          value={loading ? '—' : stats.messagesWeek}
+          accent="text-sky-400"
+        />
+      </div>
+
+      <div className="mt-6 sm:mt-8">
+        <PostCalendar operations={operations} />
       </div>
 
       <div className="mt-6 grid gap-4 sm:mt-8 sm:gap-6 lg:grid-cols-2">

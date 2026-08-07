@@ -54,14 +54,72 @@ export type JobRole =
   | 'video_editor'
   | 'traffic'
 
+export interface ClientSocialLinks {
+  instagram?: string
+  tiktok?: string
+  youtube?: string
+  facebook?: string
+  linkedin?: string
+}
+
 export interface Client {
   id: string
   workspace_id: string
   name: string
   status: ClientStatus
+  segment: string | null
+  cpf_cnpj: string | null
+  city: string | null
+  state: string | null
+  origin: string | null
+  notes: string | null
+  social_links: ClientSocialLinks
   created_at: string
   updated_at: string
   archived_at: string | null
+}
+
+export type ContractStatus = 'active' | 'paused' | 'ended'
+export type ContractPeriodicity = 'weekly' | 'monthly' | 'yearly'
+
+export interface ClientContract {
+  id: string
+  workspace_id: string
+  client_id: string
+  title: string
+  status: ContractStatus
+  start_date: string | null
+  file_url: string | null
+  service_description: string | null
+  monthly_value: number | null
+  repetitions: number | null
+  periodicity: ContractPeriodicity
+  payment_method: string | null
+  first_billing_date: string | null
+  created_by: string | null
+  created_at: string
+  updated_at: string
+}
+
+export type FinancialEntryType = 'income' | 'expense'
+export type FinancialEntryStatus = 'pending' | 'paid' | 'overdue' | 'cancelled'
+
+export interface FinancialEntry {
+  id: string
+  workspace_id: string
+  client_id: string | null
+  contract_id: string | null
+  type: FinancialEntryType
+  category: string
+  description: string
+  amount: number
+  due_date: string
+  status: FinancialEntryStatus
+  paid_at: string | null
+  created_by: string | null
+  created_at: string
+  updated_at: string
+  clients?: { name: string }
 }
 
 export interface ClientContact {
@@ -101,6 +159,8 @@ export interface DashboardStats {
   pendingOperations: number
   pendingApprovals: number
   todayAgenda: number
+  newLeadsWeek: number
+  messagesWeek: number
 }
 
 /** @deprecated Use AppUser + Membership */
@@ -328,6 +388,36 @@ export interface ClientProduct {
   active: boolean
   created_at: string
   updated_at: string
+}
+
+export type ConversationChannel = 'whatsapp'
+export type ConversationStatus = 'open' | 'closed'
+export type MessageDirection = 'inbound' | 'outbound'
+
+export interface Conversation {
+  id: string
+  workspace_id: string
+  client_id: string
+  channel: ConversationChannel
+  contact_phone: string | null
+  contact_name: string | null
+  status: ConversationStatus
+  handoff_required: boolean
+  last_message_at: string | null
+  created_at: string
+  updated_at: string
+  clients?: { name: string; status: ClientStatus }
+}
+
+export interface ConversationMessage {
+  id: string
+  workspace_id: string
+  conversation_id: string
+  client_id: string
+  direction: MessageDirection
+  content: string
+  is_ai: boolean
+  created_at: string
 }
 
 export interface BriefingFormData {

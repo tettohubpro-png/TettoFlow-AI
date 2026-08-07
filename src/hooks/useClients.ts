@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/contexts/AuthContext'
-import type { Client, ClientContact, ClientStatus } from '@/types/database'
+import type { Client, ClientContact, ClientSocialLinks, ClientStatus } from '@/types/database'
 
 export function useClients() {
   const { workspace } = useAuth()
@@ -36,7 +36,17 @@ export function useClients() {
     fetchClients()
   }, [fetchClients])
 
-  const createClient = async (payload: { name: string; status?: ClientStatus }) => {
+  const createClient = async (payload: {
+    name: string
+    status?: ClientStatus
+    segment?: string
+    cpf_cnpj?: string
+    city?: string
+    state?: string
+    origin?: string
+    notes?: string
+    social_links?: ClientSocialLinks
+  }) => {
     if (!workspace?.id) return { data: null, error: 'Workspace não carregado' }
 
     const { data, error: err } = await supabase
@@ -45,6 +55,13 @@ export function useClients() {
         name: payload.name,
         status: payload.status ?? 'ACTIVE',
         workspace_id: workspace.id,
+        segment: payload.segment || null,
+        cpf_cnpj: payload.cpf_cnpj || null,
+        city: payload.city || null,
+        state: payload.state || null,
+        origin: payload.origin || null,
+        notes: payload.notes || null,
+        social_links: payload.social_links ?? {},
       })
       .select()
       .single()

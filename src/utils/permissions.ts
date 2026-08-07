@@ -92,6 +92,13 @@ export function canViewAllClients(role: MembershipRole | undefined): boolean {
   return role === 'OWNER' || role === 'ADMIN'
 }
 
+/** Financeiro é dado sensível — mesmo corte de papéis usado na RLS de
+ * client_contracts/financial_entries (OWNER/ADMIN/MANAGER). */
+export function canManageFinance(role: MembershipRole | undefined): boolean {
+  if (!role) return false
+  return MANAGER_ROLES.includes(role)
+}
+
 export function canDeleteOperations(
   role: MembershipRole | undefined | null,
   appUser?: Pick<AppUser, 'email' | 'name'> | null,

@@ -10,6 +10,8 @@ import { DepartmentsPage } from '@/pages/DepartmentsPage'
 import { ApprovalsPage } from '@/pages/ApprovalsPage'
 import { AiPage } from '@/pages/AiPage'
 import { WhatsAppPage } from '@/pages/WhatsAppPage'
+import { InboxPage } from '@/pages/InboxPage'
+import { FinancePage } from '@/pages/FinancePage'
 import { AlertsPage } from '@/pages/AlertsPage'
 import { ReportsPage } from '@/pages/ReportsPage'
 
@@ -30,6 +32,8 @@ export default function App() {
             <Route path="relatorios" element={<ReportsPage />} />
             <Route path="ia" element={<AiPage />} />
             <Route path="whatsapp" element={<WhatsAppPage />} />
+            <Route path="mensagens" element={<InboxPage />} />
+            <Route path="financeiro" element={<FinancePage />} />
           </Route>
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>

@@ -1371,6 +1371,13 @@ async function executeWriteTool(
             is_ai: true,
           })
         }
+      } else {
+        // Pra equipe ou número avulso: registra como conversa interna, sem
+        // client_id, pra aparecer no Inbox do CRM igual apareceria no
+        // WhatsApp real da agência.
+        await upsertInternalConversation(supabase, workspaceId, targetPhone, targetLabel, [
+          { direction: 'outbound', content: message, isAi: true },
+        ])
       }
 
       return { sent: true, to: targetLabel }
@@ -1895,6 +1902,15 @@ async function handleHermesMessage(
 
   await persistHermesTurn(supabase, workspaceId, operator.id, payload.message, reply)
 
+  // Também loga como conversa interna no Inbox do CRM — essa troca acontece
+  // de verdade no WhatsApp da agência, então precisa aparecer lá igual
+  // qualquer outra conversa (só sem client_id, já que é a equipe falando
+  // com o Hermes, não um cliente).
+  await upsertInternalConversation(supabase, workspaceId, payload.phone, operator.name, [
+    { direction: 'inbound', content: payload.message, isAi: false },
+    { direction: 'outbound', content: reply, isAi: true },
+  ])
+
   await sendEvolutionText(instance, payload.phone, reply)
   await sendEvolutionPresence(instance, payload.phone, 'paused')
 
@@ -2401,6 +2417,80 @@ async function logConversation(
   } catch (err) {
     // Falha ao logar a thread não pode derrubar a resposta ao cliente.
     console.error('logConversation failed', err)
+  }
+}
+
+/**
+ * Igual a logConversation, mas pra threads SEM cliente vinculado — conversa
+ * do Hermes com um operador da equipe, ou send_message pra alguém da equipe
+ * / número avulso. Sem client_id pra usar como chave, o dedupe é por
+ * workspace + telefone (client_id IS NULL). Existe pra o Inbox do CRM
+ * espelhar 100% do que acontece no WhatsApp da agência, não só as
+ * conversas com cliente.
+ */
+async function upsertInternalConversation(
+  supabase: ReturnType<typeof createClient>,
+  workspaceId: string,
+  phone: string,
+  contactName: string | null,
+  turns: Array<{ direction: 'inbound' | 'outbound'; content: string; isAi: boolean }>,
+) {
+  try {
+    const { data: existing } = await supabase
+      .from('conversations')
+      .select('id')
+      .eq('workspace_id', workspaceId)
+      .eq('channel', 'whatsapp')
+      .eq('contact_phone', phone)
+      .is('client_id', null)
+      .maybeSingle()
+
+    let conversationId = existing?.id as string | undefined
+
+    if (conversationId) {
+      await supabase
+        .from('conversations')
+        .update({
+          contact_name: contactName ?? undefined,
+          status: 'open',
+          last_message_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', conversationId)
+    } else {
+      const { data: created } = await supabase
+        .from('conversations')
+        .insert({
+          workspace_id: workspaceId,
+          client_id: null,
+          kind: 'internal',
+          channel: 'whatsapp',
+          contact_phone: phone,
+          contact_name: contactName,
+          status: 'open',
+          handoff_required: false,
+          last_message_at: new Date().toISOString(),
+        })
+        .select('id')
+        .single()
+      conversationId = created?.id as string | undefined
+    }
+
+    if (!conversationId) return
+
+    await supabase.from('conversation_messages').insert(
+      turns.map((t) => ({
+        workspace_id: workspaceId,
+        conversation_id: conversationId,
+        client_id: null,
+        direction: t.direction,
+        content: t.content,
+        is_ai: t.isAi,
+      })),
+    )
+  } catch (err) {
+    // Falha ao logar a thread interna não pode derrubar a resposta.
+    console.error('upsertInternalConversation failed', err)
   }
 }
 

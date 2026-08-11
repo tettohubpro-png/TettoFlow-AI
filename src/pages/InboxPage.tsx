@@ -1,8 +1,9 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import {
   AlertTriangle,
   Bot,
+  Building2,
   Clock,
   Mail,
   MessageCircle,
@@ -69,7 +70,11 @@ export function InboxPage() {
         {/* Painel de contexto — fixo em telas grandes, sheet nas menores */}
         {selected && (
           <div className="hidden w-80 shrink-0 border-l border-slate-800 xl:block">
-            <ClientContextPanel conversation={selected} />
+            {selected.client_id ? (
+              <ClientContextPanel key={selected.id} conversation={selected} />
+            ) : (
+              <InternalContextPanel key={selected.id} conversation={selected} />
+            )}
           </div>
         )}
       </div>
@@ -93,7 +98,11 @@ export function InboxPage() {
                 <X size={18} />
               </button>
             </div>
-            <ClientContextPanel conversation={selected} />
+            {selected.client_id ? (
+              <ClientContextPanel key={selected.id} conversation={selected} />
+            ) : (
+              <InternalContextPanel key={selected.id} conversation={selected} />
+            )}
           </div>
         </div>
       )}
@@ -143,9 +152,14 @@ function ConversationList({
                 <span className="truncate text-sm font-medium">
                   {c.clients?.name ?? c.contact_name ?? c.contact_phone}
                 </span>
-                {c.handoff_required && (
-                  <AlertTriangle size={14} className="shrink-0 text-amber-400" />
-                )}
+                <div className="flex shrink-0 items-center gap-1">
+                  {c.kind === 'internal' && (
+                    <span className="flex items-center gap-1 rounded-full bg-slate-800 px-1.5 py-0.5 text-[10px] text-slate-400">
+                      <Building2 size={10} /> Equipe
+                    </span>
+                  )}
+                  {c.handoff_required && <AlertTriangle size={14} className="text-amber-400" />}
+                </div>
               </div>
               <span className="truncate text-xs text-slate-500">{c.contact_phone}</span>
               {preview && (
@@ -172,6 +186,15 @@ function Thread({
   const [draft, setDraft] = useState('')
   const [sending, setSending] = useState(false)
   const [sendError, setSendError] = useState<string | null>(null)
+  const bottomRef = useRef<HTMLDivElement>(null)
+
+  // Ao abrir a conversa e sempre que chegar mensagem nova (própria ou
+  // realtime), pula direto pra última mensagem — não faz sentido abrir e cair
+  // no começo da conversa, tendo que rolar manualmente até o fim.
+  useEffect(() => {
+    if (loading) return
+    bottomRef.current?.scrollIntoView({ block: 'end' })
+  }, [conversation.id, loading, messages.length])
 
   const handleSend = async () => {
     const content = draft.trim()
@@ -205,7 +228,10 @@ function Thread({
           <p className="truncate font-medium">
             {conversation.clients?.name ?? conversation.contact_name ?? 'Contato'}
           </p>
-          <p className="truncate text-xs text-slate-500">{conversation.contact_phone}</p>
+          <p className="truncate text-xs text-slate-500">
+            {conversation.contact_phone}
+            {conversation.kind === 'internal' && ' · conversa interna da equipe'}
+          </p>
         </div>
         {conversation.handoff_required && (
           <span className="flex items-center gap-1 rounded-full bg-amber-500/10 px-2 py-1 text-xs text-amber-300">
@@ -267,6 +293,7 @@ function Thread({
             </div>
           </div>
         ))}
+        <div ref={bottomRef} />
       </div>
 
       <div className="border-t border-slate-800 p-3">
@@ -300,9 +327,38 @@ function Thread({
   )
 }
 
+function InternalContextPanel({ conversation }: { conversation: Conversation }) {
+  return (
+    <div className="flex h-full flex-col gap-5 p-4 text-sm">
+      <section>
+        <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
+          Conversa interna
+        </p>
+        <p className="flex items-center gap-2 font-medium">
+          <Building2 size={14} className="text-slate-500" />
+          {conversation.contact_name ?? 'Membro da equipe'}
+        </p>
+        <p className="mt-2 text-xs text-slate-500">
+          Não é uma conversa com cliente — é o Hermes falando com alguém da equipe (ou uma
+          mensagem enviada pelo Hermes a pedido de alguém), pelo número da agência.
+        </p>
+      </section>
+
+      <section className="space-y-1">
+        <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-500">
+          Contato
+        </p>
+        <p className="flex items-center gap-2 text-slate-300">
+          <Phone size={14} className="text-slate-500" /> {conversation.contact_phone ?? '—'}
+        </p>
+      </section>
+    </div>
+  )
+}
+
 function ClientContextPanel({ conversation }: { conversation: Conversation }) {
-  const { memories, loading: memoriesLoading } = useClientMemory(conversation.client_id)
-  const { operations, loading: opsLoading } = useOperations(conversation.client_id)
+  const { memories, loading: memoriesLoading } = useClientMemory(conversation.client_id ?? undefined)
+  const { operations, loading: opsLoading } = useOperations(conversation.client_id ?? undefined)
 
   const relevantMemories = useMemo(
     () => memories.filter((m) => m.category === 'BRIEFING' || m.category === 'PREFERENCES'),

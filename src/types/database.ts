@@ -420,7 +420,8 @@ export type MessageDirection = 'inbound' | 'outbound'
 export interface Conversation {
   id: string
   workspace_id: string
-  client_id: string
+  client_id: string | null
+  kind: 'client' | 'internal'
   channel: ConversationChannel
   contact_phone: string | null
   contact_name: string | null
@@ -436,7 +437,7 @@ export interface ConversationMessage {
   id: string
   workspace_id: string
   conversation_id: string
-  client_id: string
+  client_id: string | null
   direction: MessageDirection
   content: string
   is_ai: boolean

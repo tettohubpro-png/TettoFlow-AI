@@ -669,14 +669,23 @@ const HERMES_TOOLS = [
   {
     name: 'delete_client',
     description:
-      'ESCRITA — AÇÃO RESTRITA E IRREVERSÍVEL. Apaga um cliente definitivamente (dados cadastrais, contatos, memórias, operações, tarefas ligadas, conversas, financeiro — tudo). Só o dono da agência pode aprovar essa ação; se qualquer outra pessoa pedir, recuse educadamente e diga que só o dono pode autorizar isso. Use com muito cuidado.',
+      'ESCRITA — AÇÃO RESTRITA E IRREVERSÍVEL. Apaga um ou MAIS clientes definitivamente (dados cadastrais, contatos, memórias, operações, tarefas ligadas, conversas, financeiro — tudo). Se o pedido envolver vários clientes de uma vez ("apaga esses 3 clientes de teste"), liste todos em UMA ÚNICA chamada (array "clients") — não chame essa ferramenta várias vezes na mesma resposta, e não pergunte confirmação você mesmo em texto: chame a ferramenta e o sistema cuida de pedir confirmação. Só o dono da agência pode aprovar essa ação; se qualquer outra pessoa pedir, recuse educadamente e diga que só o dono pode autorizar isso.',
     input_schema: {
       type: 'object',
       properties: {
-        client_id: { type: 'string', description: 'UUID do cliente, se já souber.' },
-        client_name: { type: 'string', description: 'Nome do cliente, se não souber o UUID.' },
+        clients: {
+          type: 'array',
+          description: 'Lista de um ou mais clientes a excluir.',
+          items: {
+            type: 'object',
+            properties: {
+              client_id: { type: 'string', description: 'UUID do cliente, se já souber.' },
+              client_name: { type: 'string', description: 'Nome do cliente, se não souber o UUID.' },
+            },
+          },
+        },
       },
-      required: [],
+      required: ['clients'],
     },
   },
   {
@@ -781,8 +790,8 @@ Você tem memória das últimas mensagens dessa conversa (aparecem no histórico
 Regras:
 1. Para qualquer pedido envolvendo um cliente específico, use search_clients primeiro se você não tiver o client_id — nunca invente um ID. Antes de usar create_client, sempre rode search_clients pelo nome primeiro: se já existir algo parecido, use update_client nesse cliente em vez de criar outro (o sistema também bloqueia duplicata por telefone/nome como segurança extra, mas não confie só nisso).
 2. Ferramentas de LEITURA (search_clients, get_client_summary) você pode chamar livremente para reunir contexto.
-3. Ferramentas de ESCRITA (update_client, create_task, update_task_status, assign_task, create_operation, update_operation_status, add_operation_comment) NUNCA são executadas na hora — ao chamar uma delas, o sistema apenas registra a ação como pendente. Depois de chamar uma ferramenta de escrita, pare e pergunte ao usuário, em português, se ele confirma a ação, descrevendo em uma frase o que vai mudar e terminando com algo como "Confirma? Responda *sim* ou *não*."
-4. Chame no máximo UMA ferramenta de escrita por mensagem do usuário.
+3. Ferramentas de ESCRITA (create_client, update_client, create_task, update_task_status, assign_task, create_operation, update_operation_status, add_operation_comment, delete_client) NUNCA são executadas na hora — ao chamar uma delas, o sistema registra a ação como pendente e te avisa. NUNCA pergunte "confirma?" em texto solto por conta própria, sem ter chamado a ferramenta — isso não registra nada e trava o fluxo. O jeito certo é: chame a ferramenta primeiro; o tool_result vai te avisar que está pendente; SÓ AÍ você escreve a pergunta de confirmação pro usuário, em uma frase, descrevendo o que vai mudar e terminando com algo como "Confirma? Responda *sim* ou *não*."
+4. Chame no máximo UMA ferramenta de escrita por mensagem do usuário. Se o pedido envolve vários itens da MESMA ação (ex: apagar vários clientes de uma vez), isso ainda conta como uma chamada só — use uma ferramenta que aceite lista (como delete_client) em vez de chamar várias vezes.
 5. Respostas curtas e diretas — 1 a 3 frases, no máximo. Nada de parágrafo explicando contexto óbvio ou listando tudo que você fez passo a passo. Está no WhatsApp, não é um relatório. Só entra em mais detalhe se o usuário pedir explicitamente.
 6. Se não entender o pedido ou faltar informação (ex: qual cliente, qual tarefa), pergunte antes de agir — em uma frase curta.
 7. Quando o usuário pedir um serviço (arte pra post, gravação, edição, tráfego) sem dizer quem deve fazer, use create_task com "department" em vez de perguntar quem é o responsável — a agência já tem gente fixa pra cada função.`
@@ -1310,43 +1319,48 @@ async function executeWriteTool(
         throw new Error('Não autorizado: só o dono da agência pode excluir clientes.')
       }
 
-      const clientRef = await resolveClientRef(supabase, workspaceId, {
-        client_id: input.client_id as string | undefined,
-        client_name: input.client_name as string | undefined,
-      })
-      if ('error' in clientRef) throw new Error(clientRef.error)
-      const clientId = clientRef.id
+      const refs = (input.clients as Array<{ client_id?: string; client_name?: string }> | undefined) ?? []
+      if (refs.length === 0) throw new Error('Informe pelo menos um cliente em "clients".')
 
-      const { data: clientRow, error: fetchErr } = await supabase
-        .from('clients')
-        .select('id, name')
-        .eq('id', clientId)
-        .eq('workspace_id', workspaceId)
-        .maybeSingle()
-      if (fetchErr) throw new Error(fetchErr.message)
-      if (!clientRow) throw new Error('Cliente não encontrado.')
-
-      // Ordem obrigatória: 'files' e 'operations' não cascateiam sozinhos ao
-      // apagar o cliente (FK sem ON DELETE CASCADE) — precisam ser limpos
-      // manualmente antes. O resto (contatos, memórias, conversas, contratos,
-      // financeiro etc.) cascateia automaticamente com o DELETE de clients.
-      const { data: ops } = await supabase.from('operations').select('id').eq('client_id', clientId)
-      const opIds = (ops ?? []).map((o) => o.id as string)
-
-      const orFilterParts = [`client_id.eq.${clientId}`]
-      if (opIds.length > 0) orFilterParts.push(`operation_id.in.(${opIds.join(',')})`)
-      const { error: filesErr } = await supabase.from('files').delete().or(orFilterParts.join(','))
-      if (filesErr) throw new Error(`Falha ao limpar arquivos: ${filesErr.message}`)
-
-      if (opIds.length > 0) {
-        const { error: opsErr } = await supabase.from('operations').delete().eq('client_id', clientId)
-        if (opsErr) throw new Error(`Falha ao limpar operações: ${opsErr.message}`)
+      // Resolve e confirma a existência de TODOS antes de apagar qualquer
+      // um — tudo ou nada, pra não deixar exclusão parcial num lote.
+      const targets: Array<{ id: string; name: string }> = []
+      for (const ref of refs) {
+        const clientRef = await resolveClientRef(supabase, workspaceId, ref)
+        if ('error' in clientRef) throw new Error(clientRef.error)
+        const { data: clientRow } = await supabase
+          .from('clients')
+          .select('id, name')
+          .eq('id', clientRef.id)
+          .eq('workspace_id', workspaceId)
+          .maybeSingle()
+        if (!clientRow) throw new Error(`Cliente não encontrado: ${ref.client_name ?? ref.client_id}`)
+        targets.push(clientRow as { id: string; name: string })
       }
 
-      const { error: clientErr } = await supabase.from('clients').delete().eq('id', clientId)
-      if (clientErr) throw new Error(clientErr.message)
+      for (const target of targets) {
+        // Ordem obrigatória: 'files' e 'operations' não cascateiam sozinhos ao
+        // apagar o cliente (FK sem ON DELETE CASCADE) — precisam ser limpos
+        // manualmente antes. O resto (contatos, memórias, conversas, contratos,
+        // financeiro etc.) cascateia automaticamente com o DELETE de clients.
+        const { data: ops } = await supabase.from('operations').select('id').eq('client_id', target.id)
+        const opIds = (ops ?? []).map((o) => o.id as string)
 
-      return { deleted: true, client: clientRow }
+        const orFilterParts = [`client_id.eq.${target.id}`]
+        if (opIds.length > 0) orFilterParts.push(`operation_id.in.(${opIds.join(',')})`)
+        const { error: filesErr } = await supabase.from('files').delete().or(orFilterParts.join(','))
+        if (filesErr) throw new Error(`Falha ao limpar arquivos de "${target.name}": ${filesErr.message}`)
+
+        if (opIds.length > 0) {
+          const { error: opsErr } = await supabase.from('operations').delete().eq('client_id', target.id)
+          if (opsErr) throw new Error(`Falha ao limpar operações de "${target.name}": ${opsErr.message}`)
+        }
+
+        const { error: clientErr } = await supabase.from('clients').delete().eq('id', target.id)
+        if (clientErr) throw new Error(`Falha ao excluir "${target.name}": ${clientErr.message}`)
+      }
+
+      return { deleted: true, clients: targets }
     }
 
     default:
@@ -1380,8 +1394,12 @@ function summarizeWriteResult(toolName: string, result: unknown): string {
       return 'Status da operação atualizado.'
     case 'add_operation_comment':
       return 'Comentário adicionado.'
-    case 'delete_client':
-      return `Cliente "${(r.client as { name?: string } | undefined)?.name ?? ''}" excluído definitivamente.`
+    case 'delete_client': {
+      const names = ((r.clients as Array<{ name?: string }> | undefined) ?? []).map((c) => c.name).filter(Boolean)
+      return names.length > 1
+        ? `${names.length} clientes excluídos definitivamente: ${names.join(', ')}.`
+        : `Cliente "${names[0] ?? ''}" excluído definitivamente.`
+    }
     default:
       return 'Ação executada.'
   }
@@ -1461,6 +1479,13 @@ async function runHermesAgentLoop(
     { role: 'user', content: userMessage },
   ]
 
+  // Escopo da CHAMADA inteira (não de uma rodada do loop) — Claude pode
+  // espalhar chamadas de ferramenta por várias idas e vindas antes de dar a
+  // resposta final; sem isso, cada rodada resetava o limite e várias ações
+  // de escrita podiam ficar pending_confirmation ao mesmo tempo (só a mais
+  // recente seria resolvida num "sim", as outras ficariam órfãs).
+  let staged = false
+
   for (let iteration = 0; iteration < 4; iteration++) {
     const response = await callClaudeMessages(
       apiKey,
@@ -1484,7 +1509,6 @@ async function runHermesAgentLoop(
     }>
 
     const toolResults: Array<Record<string, unknown>> = []
-    let staged = false
 
     for (const block of toolUseBlocks) {
       if (HERMES_WRITE_TOOLS.has(block.name)) {

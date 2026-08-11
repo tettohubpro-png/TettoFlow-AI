@@ -703,6 +703,8 @@ ${hierarchyBlock}
 
 Seu papel: ajudar a equipe a consultar e atualizar o CRM (clientes, tarefas, operações) por comando no WhatsApp.
 
+Você tem memória das últimas mensagens dessa conversa (aparecem no histórico abaixo) — use esse contexto pra entender pedidos que fazem referência a algo dito antes ("aquele cliente", "a tarefa que criei"), sem precisar que a pessoa repita tudo.
+
 Regras:
 1. Para qualquer pedido envolvendo um cliente específico, use search_clients primeiro se você não tiver o client_id — nunca invente um ID.
 2. Ferramentas de LEITURA (search_clients, get_client_summary) você pode chamar livremente para reunir contexto.
@@ -1150,6 +1152,37 @@ async function handlePendingConfirmation(
   }
 }
 
+async function loadRecentHermesMessages(
+  supabase: ReturnType<typeof createClient>,
+  workspaceId: string,
+  actorUserId: string,
+  limit = 12,
+): Promise<Array<{ role: 'user' | 'assistant'; content: string }>> {
+  const { data } = await supabase
+    .from('hermes_messages')
+    .select('role, content')
+    .eq('workspace_id', workspaceId)
+    .eq('actor_user_id', actorUserId)
+    .order('created_at', { ascending: false })
+    .limit(limit)
+  const rows = (data ?? []) as Array<{ role: 'user' | 'assistant'; content: string }>
+  return rows.reverse() // mais antiga primeiro — ordem cronológica pra API do Claude
+}
+
+async function persistHermesTurn(
+  supabase: ReturnType<typeof createClient>,
+  workspaceId: string,
+  actorUserId: string,
+  userMessage: string,
+  assistantReply: string,
+) {
+  const { error } = await supabase.from('hermes_messages').insert([
+    { workspace_id: workspaceId, actor_user_id: actorUserId, role: 'user', content: userMessage },
+    { workspace_id: workspaceId, actor_user_id: actorUserId, role: 'assistant', content: assistantReply },
+  ])
+  if (error) console.error('persistHermesTurn failed', error)
+}
+
 async function runHermesAgentLoop(
   supabase: ReturnType<typeof createClient>,
   apiKey: string,
@@ -1157,8 +1190,12 @@ async function runHermesAgentLoop(
   operator: { id: string; name: string; role: string },
   actorPhone: string,
   userMessage: string,
+  history: Array<{ role: 'user' | 'assistant'; content: string }>,
 ): Promise<string> {
-  const messages: Array<Record<string, unknown>> = [{ role: 'user', content: userMessage }]
+  const messages: Array<Record<string, unknown>> = [
+    ...history.map((h) => ({ role: h.role, content: h.content })),
+    { role: 'user', content: userMessage },
+  ]
 
   for (let iteration = 0; iteration < 4; iteration++) {
     const response = await callClaudeMessages(
@@ -1295,6 +1332,7 @@ async function handleHermesMessage(
     reply = 'Hermes ainda não está configurado (falta a chave da IA). Avisa o time técnico.'
   } else {
     try {
+      const history = await loadRecentHermesMessages(supabase, workspaceId, operator.id)
       reply = await runHermesAgentLoop(
         supabase,
         apiKey,
@@ -1302,12 +1340,15 @@ async function handleHermesMessage(
         { ...operator, role },
         payload.phone,
         payload.message,
+        history,
       )
     } catch (err) {
       console.error('runHermesAgentLoop failed', err)
       reply = 'Deu ruim aqui do meu lado processando seu pedido. Tenta de novo?'
     }
   }
+
+  await persistHermesTurn(supabase, workspaceId, operator.id, payload.message, reply)
 
   await sendEvolutionText(instance, payload.phone, reply)
   await sendEvolutionPresence(instance, payload.phone, 'paused')

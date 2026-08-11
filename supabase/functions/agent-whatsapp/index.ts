@@ -220,6 +220,14 @@ Deno.serve(async (req) => {
     )
     const groqKey = Deno.env.get('GROQ_API_KEY')
 
+    // Hermes: se o telefone é de um membro da equipe (users.whatsapp_phone),
+    // desvia totalmente do fluxo de atendimento a cliente/lead abaixo.
+    const operator = await resolveOperator(supabase, payload.phone)
+    if (operator) {
+      const hermesResult = await handleHermesMessage(supabase, operator, payload, instance)
+      return json(hermesResult)
+    }
+
     await sendEvolutionPresence(instance, payload.phone, 'composing')
 
     let client = await resolveClient(supabase, payload)
@@ -481,6 +489,774 @@ async function resolveClient(
   }
 
   return null
+}
+
+// ============================================================================
+// Hermes — agente operacional via WhatsApp (equipe interna, não cliente)
+// ============================================================================
+//
+// Fluxo por mensagem recebida de um número cadastrado em users.whatsapp_phone:
+// 1. Se há uma ação de escrita pendente de confirmação (agent_actions_log,
+//    status='pending_confirmation') para esse ator, a mensagem é interpretada
+//    como sim/não — não passa pelo Claude de novo.
+// 2. Caso contrário, roda um loop de tool-calling com o Claude: ferramentas de
+//    LEITURA executam na hora; ferramentas de ESCRITA só ficam "staged"
+//    (pending_confirmation) — o Claude é instruído a parar e perguntar
+//    confirmação em português, e a execução real só acontece no passo 1 da
+//    próxima mensagem.
+// Toda chamada de ferramenta (leitura ou escrita) grava uma linha em
+// agent_actions_log.
+
+const HERMES_WRITE_TOOLS = new Set([
+  'update_client',
+  'create_task',
+  'update_task_status',
+  'assign_task',
+  'create_operation',
+  'update_operation_status',
+  'add_operation_comment',
+])
+
+const OPERATION_STATUSES = [
+  'DRAFT',
+  'SUBMITTED',
+  'ANALYSIS',
+  'PRODUCTION',
+  'REVIEW',
+  'CLIENT',
+  'APPROVED',
+  'PUBLISHED',
+  'DONE',
+]
+const TASK_STATUSES = ['backlog', 'todo', 'in_progress', 'done']
+const PRIORITIES = ['LOW', 'MEDIUM', 'HIGH', 'CRITICAL']
+const CLIENT_STATUSES = ['ACTIVE', 'INACTIVE', 'ARCHIVED']
+
+const HERMES_TOOLS = [
+  {
+    name: 'search_clients',
+    description:
+      'Busca clientes do workspace pelo nome (ou parte dele). Use antes de qualquer outra ferramenta que precise de client_id, a menos que o usuário já tenha informado o ID.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', description: 'Nome ou parte do nome do cliente/empresa a buscar.' },
+      },
+      required: ['query'],
+    },
+  },
+  {
+    name: 'get_client_summary',
+    description:
+      'Retorna um resumo completo de um cliente: dados cadastrais, contato principal, memórias/briefing mais importantes e quantidade de operações em aberto.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        client_id: { type: 'string', description: 'UUID do cliente (obtido via search_clients).' },
+      },
+      required: ['client_id'],
+    },
+  },
+  {
+    name: 'update_client',
+    description:
+      'ESCRITA. Atualiza dados cadastrais de um cliente (nome, status, segmento, cidade, estado, observações, origem, CPF/CNPJ). Só envie os campos que devem mudar.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        client_id: { type: 'string', description: 'UUID do cliente.' },
+        name: { type: 'string' },
+        status: { type: 'string', enum: CLIENT_STATUSES },
+        segment: { type: 'string' },
+        city: { type: 'string' },
+        state: { type: 'string' },
+        notes: { type: 'string' },
+        origin: { type: 'string' },
+        cpf_cnpj: { type: 'string' },
+      },
+      required: ['client_id'],
+    },
+  },
+  {
+    name: 'create_task',
+    description: 'ESCRITA. Cria uma tarefa no quadro de Tarefas do workspace.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        title: { type: 'string', description: 'Título da tarefa.' },
+        description: { type: 'string' },
+        priority: { type: 'string', enum: PRIORITIES, description: 'Padrão: MEDIUM.' },
+        operation_id: { type: 'string', description: 'UUID da operação relacionada, se houver.' },
+        assignee_id: { type: 'string', description: 'UUID do responsável, se já souber.' },
+        assignee_name: { type: 'string', description: 'Nome do responsável, se não souber o UUID.' },
+        due_date: { type: 'string', description: 'Data de vencimento no formato YYYY-MM-DD.' },
+      },
+      required: ['title'],
+    },
+  },
+  {
+    name: 'update_task_status',
+    description: 'ESCRITA. Muda o status de uma tarefa existente.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        task_id: { type: 'string', description: 'UUID da tarefa.' },
+        status: { type: 'string', enum: TASK_STATUSES },
+      },
+      required: ['task_id', 'status'],
+    },
+  },
+  {
+    name: 'assign_task',
+    description: 'ESCRITA. Atribui (ou reatribui) uma tarefa a um membro da equipe.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        task_id: { type: 'string', description: 'UUID da tarefa.' },
+        assignee_id: { type: 'string', description: 'UUID do responsável, se já souber.' },
+        assignee_name: { type: 'string', description: 'Nome do responsável, se não souber o UUID.' },
+      },
+      required: ['task_id'],
+    },
+  },
+  {
+    name: 'create_operation',
+    description: 'ESCRITA. Cria uma nova operação/solicitação para um cliente (status inicial DRAFT).',
+    input_schema: {
+      type: 'object',
+      properties: {
+        title: { type: 'string' },
+        client_id: { type: 'string', description: 'UUID do cliente, se já souber.' },
+        client_name: { type: 'string', description: 'Nome do cliente, se não souber o UUID.' },
+        description: { type: 'string' },
+        priority: { type: 'string', enum: PRIORITIES, description: 'Padrão: MEDIUM.' },
+        deadline: { type: 'string', description: 'Prazo no formato YYYY-MM-DD.' },
+      },
+      required: ['title'],
+    },
+  },
+  {
+    name: 'update_operation_status',
+    description: 'ESCRITA. Muda o status de uma operação existente.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        operation_id: { type: 'string', description: 'UUID da operação.' },
+        status: { type: 'string', enum: OPERATION_STATUSES },
+      },
+      required: ['operation_id', 'status'],
+    },
+  },
+  {
+    name: 'add_operation_comment',
+    description: 'ESCRITA. Adiciona um comentário/sugestão em uma operação.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        operation_id: { type: 'string', description: 'UUID da operação.' },
+        content: { type: 'string', description: 'Texto do comentário.' },
+      },
+      required: ['operation_id', 'content'],
+    },
+  },
+]
+
+function hermesSystemPrompt(operatorName: string): string {
+  return `Você é o Hermes, assistente operacional interno da TettoHub, conversando por WhatsApp com ${operatorName}, um membro da equipe (não é cliente).
+
+Seu papel: ajudar a equipe a consultar e atualizar o CRM (clientes, tarefas, operações) por comando no WhatsApp.
+
+Regras:
+1. Para qualquer pedido envolvendo um cliente específico, use search_clients primeiro se você não tiver o client_id — nunca invente um ID.
+2. Ferramentas de LEITURA (search_clients, get_client_summary) você pode chamar livremente para reunir contexto.
+3. Ferramentas de ESCRITA (update_client, create_task, update_task_status, assign_task, create_operation, update_operation_status, add_operation_comment) NUNCA são executadas na hora — ao chamar uma delas, o sistema apenas registra a ação como pendente. Depois de chamar uma ferramenta de escrita, pare e pergunte ao usuário, em português, se ele confirma a ação, descrevendo em uma frase o que vai mudar e terminando com algo como "Confirma? Responda *sim* ou *não*."
+4. Chame no máximo UMA ferramenta de escrita por mensagem do usuário.
+5. Seja direto e breve — está no WhatsApp, não é um relatório.
+6. Se não entender o pedido ou faltar informação (ex: qual cliente, qual tarefa), pergunte antes de agir.`
+}
+
+async function callClaudeMessages(
+  apiKey: string,
+  system: string,
+  tools: unknown[],
+  messages: unknown[],
+): Promise<{ stop_reason: string; content: Array<Record<string, unknown>> }> {
+  const res = await fetchWithTimeout(
+    'https://api.anthropic.com/v1/messages',
+    {
+      method: 'POST',
+      headers: {
+        'x-api-key': apiKey,
+        'anthropic-version': '2023-06-01',
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: 'claude-sonnet-5',
+        max_tokens: 2048,
+        system,
+        tools,
+        messages,
+      }),
+    },
+    15000,
+  )
+  const body = await res.json()
+  if (!res.ok) {
+    console.error('Anthropic API error', body)
+    throw new Error(body?.error?.message || `Anthropic API error ${res.status}`)
+  }
+  return body
+}
+
+async function resolveOperator(
+  supabase: ReturnType<typeof createClient>,
+  phone: string,
+): Promise<{ id: string; name: string; email: string } | null> {
+  const phoneDigits = phone.replace(/\D/g, '')
+  if (!phoneDigits) return null
+
+  const withoutDDI = phoneDigits.replace(/^55/, '')
+  const variants = Array.from(new Set([phoneDigits, withoutDDI, `55${withoutDDI}`]))
+  const orFilter = variants.map((v) => `whatsapp_phone.eq.${v}`).join(',')
+
+  const { data } = await supabase
+    .from('users')
+    .select('id, name, email')
+    .not('whatsapp_phone', 'is', null)
+    .or(orFilter)
+    .limit(1)
+    .maybeSingle()
+
+  return (data as { id: string; name: string; email: string } | null) ?? null
+}
+
+async function getOperatorWorkspaceId(
+  supabase: ReturnType<typeof createClient>,
+  userId: string,
+): Promise<string | null> {
+  const { data } = await supabase
+    .from('memberships')
+    .select('workspace_id')
+    .eq('user_id', userId)
+    .limit(1)
+    .maybeSingle()
+  return (data?.workspace_id as string | undefined) ?? null
+}
+
+async function logAgentAction(
+  supabase: ReturnType<typeof createClient>,
+  params: {
+    workspaceId: string
+    actorUserId: string
+    actorPhone: string
+    toolName: string
+    input: unknown
+    status: 'pending_confirmation' | 'executed' | 'failed'
+    result?: unknown
+    error?: string
+  },
+): Promise<string | null> {
+  const { data, error } = await supabase
+    .from('agent_actions_log')
+    .insert({
+      workspace_id: params.workspaceId,
+      actor_user_id: params.actorUserId,
+      actor_phone: params.actorPhone,
+      tool_name: params.toolName,
+      input: params.input ?? {},
+      status: params.status,
+      result: params.result ?? null,
+      error: params.error ?? null,
+      resolved_at: params.status === 'pending_confirmation' ? null : new Date().toISOString(),
+    })
+    .select('id')
+    .single()
+  if (error) {
+    console.error('logAgentAction failed', error)
+    return null
+  }
+  return (data?.id as string | undefined) ?? null
+}
+
+async function updateAgentAction(
+  supabase: ReturnType<typeof createClient>,
+  id: string,
+  fields: { status: 'confirmed' | 'rejected' | 'executed' | 'failed'; result?: unknown; error?: string },
+) {
+  await supabase
+    .from('agent_actions_log')
+    .update({
+      status: fields.status,
+      result: fields.result ?? null,
+      error: fields.error ?? null,
+      resolved_at: new Date().toISOString(),
+    })
+    .eq('id', id)
+}
+
+async function resolveClientRef(
+  supabase: ReturnType<typeof createClient>,
+  workspaceId: string,
+  input: { client_id?: string; client_name?: string },
+): Promise<{ id: string } | { error: string }> {
+  if (input.client_id) return { id: input.client_id }
+  if (input.client_name) {
+    const { data } = await supabase
+      .from('clients')
+      .select('id, name')
+      .eq('workspace_id', workspaceId)
+      .ilike('name', `%${input.client_name}%`)
+      .limit(2)
+    if (!data || data.length === 0) {
+      return { error: `Nenhum cliente encontrado com o nome "${input.client_name}".` }
+    }
+    if (data.length > 1) {
+      return {
+        error: `Mais de um cliente encontrado com o nome "${input.client_name}" — use search_clients e informe o client_id.`,
+      }
+    }
+    return { id: data[0].id as string }
+  }
+  return { error: 'Informe client_id ou client_name.' }
+}
+
+async function resolveUserRef(
+  supabase: ReturnType<typeof createClient>,
+  workspaceId: string,
+  input: { assignee_id?: string; assignee_name?: string },
+): Promise<{ id: string | null } | { error: string }> {
+  if (input.assignee_id) return { id: input.assignee_id }
+  if (input.assignee_name) {
+    const { data: memberships } = await supabase
+      .from('memberships')
+      .select('user_id, users(id, name)')
+      .eq('workspace_id', workspaceId)
+    const needle = input.assignee_name.toLowerCase()
+    const matches = (memberships ?? []).filter((m) => {
+      const u = m.users as unknown as { name: string } | null
+      return u?.name?.toLowerCase().includes(needle)
+    })
+    if (matches.length === 0) {
+      return { error: `Nenhum membro da equipe encontrado com o nome "${input.assignee_name}".` }
+    }
+    if (matches.length > 1) {
+      return { error: `Mais de um membro encontrado com o nome "${input.assignee_name}" — seja mais específico.` }
+    }
+    return { id: matches[0].user_id as string }
+  }
+  return { id: null }
+}
+
+async function executeReadTool(
+  supabase: ReturnType<typeof createClient>,
+  workspaceId: string,
+  toolName: string,
+  input: Record<string, unknown>,
+): Promise<unknown> {
+  if (toolName === 'search_clients') {
+    const query = String(input.query ?? '').trim()
+    if (!query) return { error: 'query vazia' }
+    const { data } = await supabase
+      .from('clients')
+      .select('id, name, status, city, state')
+      .eq('workspace_id', workspaceId)
+      .ilike('name', `%${query}%`)
+      .order('name')
+      .limit(10)
+    return { clients: data ?? [] }
+  }
+
+  if (toolName === 'get_client_summary') {
+    const clientId = String(input.client_id ?? '')
+    const { data: client } = await supabase
+      .from('clients')
+      .select('id, name, status, segment, city, state, origin, notes, cpf_cnpj')
+      .eq('id', clientId)
+      .eq('workspace_id', workspaceId)
+      .maybeSingle()
+    if (!client) return { error: 'Cliente não encontrado.' }
+
+    const { data: contact } = await supabase
+      .from('client_contacts')
+      .select('name, email, phone')
+      .eq('client_id', clientId)
+      .eq('is_primary', true)
+      .maybeSingle()
+
+    const { data: memories } = await supabase
+      .from('client_ai_memory')
+      .select('title, content, category')
+      .eq('client_id', clientId)
+      .eq('active', true)
+      .order('importance', { ascending: false })
+      .limit(5)
+
+    const { count: openOperations } = await supabase
+      .from('operations')
+      .select('id', { count: 'exact', head: true })
+      .eq('client_id', clientId)
+      .not('status', 'in', '(DONE,PUBLISHED)')
+
+    return {
+      client,
+      contact: contact ?? null,
+      memories: memories ?? [],
+      open_operations: openOperations ?? 0,
+    }
+  }
+
+  return { error: `Ferramenta desconhecida: ${toolName}` }
+}
+
+async function executeWriteTool(
+  supabase: ReturnType<typeof createClient>,
+  workspaceId: string,
+  actorId: string,
+  toolName: string,
+  input: Record<string, unknown>,
+): Promise<unknown> {
+  switch (toolName) {
+    case 'update_client': {
+      const clientId = String(input.client_id ?? '')
+      const fields: Record<string, unknown> = {}
+      for (const key of ['name', 'status', 'segment', 'city', 'state', 'notes', 'origin', 'cpf_cnpj']) {
+        if (input[key] !== undefined) fields[key] = input[key]
+      }
+      if (Object.keys(fields).length === 0) throw new Error('Nenhum campo para atualizar.')
+      const { data, error } = await supabase
+        .from('clients')
+        .update(fields)
+        .eq('id', clientId)
+        .eq('workspace_id', workspaceId)
+        .select('id, name')
+        .maybeSingle()
+      if (error) throw new Error(error.message)
+      if (!data) throw new Error('Cliente não encontrado.')
+      return { updated: true, client: data }
+    }
+
+    case 'create_task': {
+      const assignee = await resolveUserRef(supabase, workspaceId, {
+        assignee_id: input.assignee_id as string | undefined,
+        assignee_name: input.assignee_name as string | undefined,
+      })
+      if ('error' in assignee) throw new Error(assignee.error)
+      const { data, error } = await supabase
+        .from('tasks')
+        .insert({
+          workspace_id: workspaceId,
+          title: String(input.title ?? ''),
+          description: (input.description as string | undefined) ?? null,
+          priority: (input.priority as string | undefined) ?? 'MEDIUM',
+          operation_id: (input.operation_id as string | undefined) ?? null,
+          assignee_id: assignee.id,
+          due_date: (input.due_date as string | undefined) ?? null,
+          created_by: actorId,
+        })
+        .select('id, title')
+        .single()
+      if (error) throw new Error(error.message)
+      return { created: true, task: data }
+    }
+
+    case 'update_task_status': {
+      const { data, error } = await supabase
+        .from('tasks')
+        .update({ status: input.status })
+        .eq('id', String(input.task_id ?? ''))
+        .eq('workspace_id', workspaceId)
+        .select('id, title, status')
+        .maybeSingle()
+      if (error) throw new Error(error.message)
+      if (!data) throw new Error('Tarefa não encontrada.')
+      return { updated: true, task: data }
+    }
+
+    case 'assign_task': {
+      const assignee = await resolveUserRef(supabase, workspaceId, {
+        assignee_id: input.assignee_id as string | undefined,
+        assignee_name: input.assignee_name as string | undefined,
+      })
+      if ('error' in assignee) throw new Error(assignee.error)
+      if (!assignee.id) throw new Error('Informe assignee_id ou assignee_name.')
+      const { data, error } = await supabase
+        .from('tasks')
+        .update({ assignee_id: assignee.id })
+        .eq('id', String(input.task_id ?? ''))
+        .eq('workspace_id', workspaceId)
+        .select('id, title')
+        .maybeSingle()
+      if (error) throw new Error(error.message)
+      if (!data) throw new Error('Tarefa não encontrada.')
+      return { updated: true, task: data }
+    }
+
+    case 'create_operation': {
+      const clientRef = await resolveClientRef(supabase, workspaceId, {
+        client_id: input.client_id as string | undefined,
+        client_name: input.client_name as string | undefined,
+      })
+      if ('error' in clientRef) throw new Error(clientRef.error)
+      const { data, error } = await supabase
+        .from('operations')
+        .insert({
+          workspace_id: workspaceId,
+          client_id: clientRef.id,
+          template_id: DEFAULT_TEMPLATE_ID,
+          title: String(input.title ?? ''),
+          description: (input.description as string | undefined) ?? null,
+          status: 'DRAFT',
+          priority: (input.priority as string | undefined) ?? 'MEDIUM',
+          deadline: (input.deadline as string | undefined) ?? null,
+          created_by: actorId,
+        })
+        .select('id, title')
+        .single()
+      if (error) throw new Error(error.message)
+      return { created: true, operation: data }
+    }
+
+    case 'update_operation_status': {
+      const { data, error } = await supabase
+        .from('operations')
+        .update({ status: input.status })
+        .eq('id', String(input.operation_id ?? ''))
+        .eq('workspace_id', workspaceId)
+        .select('id, title, status')
+        .maybeSingle()
+      if (error) throw new Error(error.message)
+      if (!data) throw new Error('Operação não encontrada.')
+      return { updated: true, operation: data }
+    }
+
+    case 'add_operation_comment': {
+      const { data, error } = await supabase
+        .from('operation_comments')
+        .insert({
+          workspace_id: workspaceId,
+          operation_id: String(input.operation_id ?? ''),
+          author_id: actorId,
+          content: String(input.content ?? ''),
+        })
+        .select('id')
+        .single()
+      if (error) throw new Error(error.message)
+      return { created: true, comment_id: data?.id }
+    }
+
+    default:
+      throw new Error(`Ferramenta de escrita desconhecida: ${toolName}`)
+  }
+}
+
+function interpretConfirmation(message: string): 'yes' | 'no' | 'unclear' {
+  const text = message.trim().toLowerCase()
+  if (/^(sim|s|ok|confirmo|confirmado|pode|manda|isso|yes)\b/.test(text)) return 'yes'
+  if (/^(n[aã]o|nao|n|cancela|cancelar|para|no)\b/.test(text)) return 'no'
+  return 'unclear'
+}
+
+function summarizeWriteResult(toolName: string, result: unknown): string {
+  const r = (result ?? {}) as Record<string, unknown>
+  switch (toolName) {
+    case 'update_client':
+      return 'Cliente atualizado.'
+    case 'create_task':
+      return `Tarefa criada: "${(r.task as { title?: string } | undefined)?.title ?? ''}".`
+    case 'update_task_status':
+      return 'Status da tarefa atualizado.'
+    case 'assign_task':
+      return 'Tarefa reatribuída.'
+    case 'create_operation':
+      return `Operação criada: "${(r.operation as { title?: string } | undefined)?.title ?? ''}".`
+    case 'update_operation_status':
+      return 'Status da operação atualizado.'
+    case 'add_operation_comment':
+      return 'Comentário adicionado.'
+    default:
+      return 'Ação executada.'
+  }
+}
+
+async function handlePendingConfirmation(
+  supabase: ReturnType<typeof createClient>,
+  workspaceId: string,
+  actorId: string,
+  pending: { id: string; tool_name: string; input: Record<string, unknown> },
+  message: string,
+): Promise<string> {
+  const decision = interpretConfirmation(message)
+
+  if (decision === 'unclear') {
+    return 'Não entendi. Confirma essa ação? Responda *sim* ou *não*.'
+  }
+
+  if (decision === 'no') {
+    await updateAgentAction(supabase, pending.id, { status: 'rejected' })
+    return 'Ação cancelada. ✋'
+  }
+
+  await updateAgentAction(supabase, pending.id, { status: 'confirmed' })
+  try {
+    const result = await executeWriteTool(supabase, workspaceId, actorId, pending.tool_name, pending.input)
+    await updateAgentAction(supabase, pending.id, { status: 'executed', result })
+    return `Pronto! ✅ ${summarizeWriteResult(pending.tool_name, result)}`
+  } catch (err) {
+    await updateAgentAction(supabase, pending.id, { status: 'failed', error: String(err) })
+    return `Não consegui concluir a ação: ${String(err)}`
+  }
+}
+
+async function runHermesAgentLoop(
+  supabase: ReturnType<typeof createClient>,
+  apiKey: string,
+  workspaceId: string,
+  operator: { id: string; name: string },
+  actorPhone: string,
+  userMessage: string,
+): Promise<string> {
+  const messages: Array<Record<string, unknown>> = [{ role: 'user', content: userMessage }]
+
+  for (let iteration = 0; iteration < 4; iteration++) {
+    const response = await callClaudeMessages(apiKey, hermesSystemPrompt(operator.name), HERMES_TOOLS, messages)
+
+    if (response.stop_reason !== 'tool_use') {
+      const textBlock = response.content.find((b) => b.type === 'text') as { text: string } | undefined
+      return textBlock?.text?.trim() || 'Não consegui responder a isso agora.'
+    }
+
+    messages.push({ role: 'assistant', content: response.content })
+
+    const toolUseBlocks = response.content.filter((b) => b.type === 'tool_use') as Array<{
+      type: 'tool_use'
+      id: string
+      name: string
+      input: Record<string, unknown>
+    }>
+
+    const toolResults: Array<Record<string, unknown>> = []
+    let staged = false
+
+    for (const block of toolUseBlocks) {
+      if (HERMES_WRITE_TOOLS.has(block.name)) {
+        if (staged) {
+          toolResults.push({
+            type: 'tool_result',
+            tool_use_id: block.id,
+            content: 'Ignorado: só uma ação de escrita por mensagem.',
+          })
+          continue
+        }
+        const logId = await logAgentAction(supabase, {
+          workspaceId,
+          actorUserId: operator.id,
+          actorPhone,
+          toolName: block.name,
+          input: block.input,
+          status: 'pending_confirmation',
+        })
+        staged = true
+        toolResults.push({
+          type: 'tool_result',
+          tool_use_id: block.id,
+          content: logId
+            ? 'STAGED_PENDING_CONFIRMATION: a ação foi registrada e está aguardando confirmação do usuário. Agora explique em português, em uma frase, o que essa ação vai fazer, e pergunte "Confirma? Responda sim ou não." Não chame outra ferramenta nesta resposta.'
+            : 'Falha ao registrar a ação pendente — avise o usuário que não deu pra continuar agora.',
+        })
+      } else {
+        try {
+          const result = await executeReadTool(supabase, workspaceId, block.name, block.input)
+          await logAgentAction(supabase, {
+            workspaceId,
+            actorUserId: operator.id,
+            actorPhone,
+            toolName: block.name,
+            input: block.input,
+            status: 'executed',
+            result,
+          })
+          toolResults.push({
+            type: 'tool_result',
+            tool_use_id: block.id,
+            content: JSON.stringify(result),
+          })
+        } catch (err) {
+          await logAgentAction(supabase, {
+            workspaceId,
+            actorUserId: operator.id,
+            actorPhone,
+            toolName: block.name,
+            input: block.input,
+            status: 'failed',
+            error: String(err),
+          })
+          toolResults.push({
+            type: 'tool_result',
+            tool_use_id: block.id,
+            content: String(err),
+            is_error: true,
+          })
+        }
+      }
+    }
+
+    messages.push({ role: 'user', content: toolResults })
+  }
+
+  return 'Desculpa, não consegui concluir isso agora. Pode tentar de novo, de um jeito mais direto?'
+}
+
+async function handleHermesMessage(
+  supabase: ReturnType<typeof createClient>,
+  operator: { id: string; name: string; email: string },
+  payload: Payload,
+  instance: string | undefined,
+): Promise<Record<string, unknown>> {
+  const workspaceId = await getOperatorWorkspaceId(supabase, operator.id)
+  if (!workspaceId) {
+    const reply = 'Não achei seu workspace cadastrado. Fala com o admin pra revisar seu acesso.'
+    await sendEvolutionText(instance, payload.phone, reply)
+    return { reply, hermes: true, actor_user_id: operator.id }
+  }
+
+  await sendEvolutionPresence(instance, payload.phone, 'composing')
+
+  const { data: pending } = await supabase
+    .from('agent_actions_log')
+    .select('id, tool_name, input')
+    .eq('actor_user_id', operator.id)
+    .eq('workspace_id', workspaceId)
+    .eq('status', 'pending_confirmation')
+    .order('requested_at', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+
+  const apiKey = Deno.env.get('ANTHROPIC_API_KEY')
+
+  let reply: string
+  if (pending) {
+    reply = await handlePendingConfirmation(
+      supabase,
+      workspaceId,
+      operator.id,
+      pending as { id: string; tool_name: string; input: Record<string, unknown> },
+      payload.message,
+    )
+  } else if (!apiKey) {
+    reply = 'Hermes ainda não está configurado (falta a chave da IA). Avisa o time técnico.'
+  } else {
+    try {
+      reply = await runHermesAgentLoop(supabase, apiKey, workspaceId, operator, payload.phone, payload.message)
+    } catch (err) {
+      console.error('runHermesAgentLoop failed', err)
+      reply = 'Deu ruim aqui do meu lado processando seu pedido. Tenta de novo?'
+    }
+  }
+
+  await sendEvolutionText(instance, payload.phone, reply)
+  await sendEvolutionPresence(instance, payload.phone, 'paused')
+
+  return { reply, hermes: true, actor_user_id: operator.id, workspace_id: workspaceId }
 }
 
 function emptyIntake(): IntakeData {

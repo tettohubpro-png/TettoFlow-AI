@@ -1156,7 +1156,7 @@ async function loadRecentHermesMessages(
   supabase: ReturnType<typeof createClient>,
   workspaceId: string,
   actorUserId: string,
-  limit = 12,
+  limit = 20,
 ): Promise<Array<{ role: 'user' | 'assistant'; content: string }>> {
   const { data } = await supabase
     .from('hermes_messages')

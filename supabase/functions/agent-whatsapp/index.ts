@@ -661,8 +661,17 @@ const HERMES_TOOLS = [
   },
 ]
 
-function hermesSystemPrompt(operatorName: string): string {
-  return `Você é o Hermes, assistente operacional interno da TettoHub, conversando por WhatsApp com ${operatorName}, um membro da equipe (não é cliente).
+function hermesSystemPrompt(operatorName: string, operatorRole: string): string {
+  const roleLabel = ROLE_LABELS[operatorRole] ?? operatorRole
+  const isOwnerOrAdmin = operatorRole === 'OWNER' || operatorRole === 'ADMIN'
+
+  const hierarchyBlock = isOwnerOrAdmin
+    ? `Quem está falando com você agora é ${operatorName}, o(a) **${roleLabel}** da TettoHub — a maior autoridade na agência. Trate essa pessoa com prioridade máxima: dê respostas completas, sem omitir informação, e assuma que ela tem acesso irrestrito a qualquer dado do CRM (todos os clientes, todas as operações, tudo). Não hesite nem peça permissão extra além da confirmação normal de ações de escrita.`
+    : `Quem está falando com você agora é ${operatorName}, **${roleLabel}** da equipe TettoHub. Por enquanto o acesso dele(a) às ferramentas é o mesmo de qualquer operador (a restrição de informação por cargo ainda não foi implementada — está planejada, mas ainda não vale). Trate normalmente, com o mesmo cuidado de sempre nas confirmações de escrita.`
+
+  return `Você é o Hermes, assistente operacional interno da TettoHub, conversando por WhatsApp com um membro da equipe (não é cliente).
+
+${hierarchyBlock}
 
 Seu papel: ajudar a equipe a consultar e atualizar o CRM (clientes, tarefas, operações) por comando no WhatsApp.
 
@@ -730,17 +739,25 @@ async function resolveOperator(
   return (data as { id: string; name: string; email: string } | null) ?? null
 }
 
-async function getOperatorWorkspaceId(
+async function getOperatorMembership(
   supabase: ReturnType<typeof createClient>,
   userId: string,
-): Promise<string | null> {
+): Promise<{ workspaceId: string; role: string } | null> {
   const { data } = await supabase
     .from('memberships')
-    .select('workspace_id')
+    .select('workspace_id, role')
     .eq('user_id', userId)
     .limit(1)
     .maybeSingle()
-  return (data?.workspace_id as string | undefined) ?? null
+  if (!data?.workspace_id) return null
+  return { workspaceId: data.workspace_id as string, role: (data.role as string) ?? 'MEMBER' }
+}
+
+const ROLE_LABELS: Record<string, string> = {
+  OWNER: 'Dono da agência',
+  ADMIN: 'Administrador',
+  MANAGER: 'Gerente',
+  MEMBER: 'Funcionário',
 }
 
 async function logAgentAction(
@@ -1111,14 +1128,19 @@ async function runHermesAgentLoop(
   supabase: ReturnType<typeof createClient>,
   apiKey: string,
   workspaceId: string,
-  operator: { id: string; name: string },
+  operator: { id: string; name: string; role: string },
   actorPhone: string,
   userMessage: string,
 ): Promise<string> {
   const messages: Array<Record<string, unknown>> = [{ role: 'user', content: userMessage }]
 
   for (let iteration = 0; iteration < 4; iteration++) {
-    const response = await callClaudeMessages(apiKey, hermesSystemPrompt(operator.name), HERMES_TOOLS, messages)
+    const response = await callClaudeMessages(
+      apiKey,
+      hermesSystemPrompt(operator.name, operator.role),
+      HERMES_TOOLS,
+      messages,
+    )
 
     if (response.stop_reason !== 'tool_use') {
       const textBlock = response.content.find((b) => b.type === 'text') as { text: string } | undefined
@@ -1212,12 +1234,13 @@ async function handleHermesMessage(
   payload: Payload,
   instance: string | undefined,
 ): Promise<Record<string, unknown>> {
-  const workspaceId = await getOperatorWorkspaceId(supabase, operator.id)
-  if (!workspaceId) {
+  const membership = await getOperatorMembership(supabase, operator.id)
+  if (!membership) {
     const reply = 'Não achei seu workspace cadastrado. Fala com o admin pra revisar seu acesso.'
     await sendEvolutionText(instance, payload.phone, reply)
     return { reply, hermes: true, actor_user_id: operator.id }
   }
+  const { workspaceId, role } = membership
 
   await sendEvolutionPresence(instance, payload.phone, 'composing')
 
@@ -1246,7 +1269,14 @@ async function handleHermesMessage(
     reply = 'Hermes ainda não está configurado (falta a chave da IA). Avisa o time técnico.'
   } else {
     try {
-      reply = await runHermesAgentLoop(supabase, apiKey, workspaceId, operator, payload.phone, payload.message)
+      reply = await runHermesAgentLoop(
+        supabase,
+        apiKey,
+        workspaceId,
+        { ...operator, role },
+        payload.phone,
+        payload.message,
+      )
     } catch (err) {
       console.error('runHermesAgentLoop failed', err)
       reply = 'Deu ruim aqui do meu lado processando seu pedido. Tenta de novo?'

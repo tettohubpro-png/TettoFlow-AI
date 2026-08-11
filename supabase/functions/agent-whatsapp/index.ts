@@ -1364,6 +1364,7 @@ async function executeWriteTool(
       let targetPhone: string | null = null
       let targetLabel = ''
       let clientForLog: { id: string } | null = null
+      let unknownContact = false
 
       if (input.to_team_member_name) {
         const { data: memberships } = await supabase
@@ -1414,6 +1415,26 @@ async function executeWriteTool(
       } else if (input.to_phone) {
         targetPhone = String(input.to_phone)
         targetLabel = targetPhone
+
+        // to_phone é a via "crua" — sem nome, então antes de mandar cego
+        // pra um número desconhecido, checa se esse telefone já é de um
+        // cliente ou de um operador cadastrado (reaproveitando o mesmo
+        // matching por variação de número usado em resolveClient/
+        // resolveOperator). Sem isso, mensagens pra clientes conhecidos
+        // (identificados só pelo número) criavam uma conversa "Equipe"
+        // fantasma em vez de cair na conversa do cliente de verdade.
+        const phoneClient = await resolveClient(supabase, { phone: targetPhone, message: '' })
+        if (phoneClient && (phoneClient.workspace_id as string) === workspaceId) {
+          clientForLog = { id: phoneClient.id as string }
+          targetLabel = phoneClient.name as string
+        } else {
+          const phoneOperator = await resolveOperator(supabase, targetPhone)
+          if (phoneOperator) {
+            targetLabel = phoneOperator.name
+          } else {
+            unknownContact = true
+          }
+        }
       } else {
         throw new Error('Informe to_team_member_name, to_client_name ou to_phone.')
       }
@@ -1464,12 +1485,19 @@ async function executeWriteTool(
           })
         }
       } else {
-        // Pra equipe ou número avulso: registra como conversa interna, sem
-        // client_id, pra aparecer no Inbox do CRM igual apareceria no
-        // WhatsApp real da agência.
-        await upsertInternalConversation(supabase, workspaceId, targetPhone, targetLabel, [
-          { direction: 'outbound', content: message, isAi: true },
-        ])
+        // Pra equipe (verificada) ou número avulso: registra como conversa
+        // interna, sem client_id, pra aparecer no Inbox do CRM igual
+        // apareceria no WhatsApp real da agência. 'unknown' quando o
+        // to_phone não bateu com cliente nem operador cadastrado — não
+        // rotula como "Equipe" um número que não foi confirmado como time.
+        await upsertInternalConversation(
+          supabase,
+          workspaceId,
+          targetPhone,
+          targetLabel,
+          unknownContact ? 'unknown' : 'internal',
+          [{ direction: 'outbound', content: message, isAi: true }],
+        )
       }
 
       return { sent: true, to: targetLabel }
@@ -2036,7 +2064,7 @@ async function handleHermesMessage(
   // de verdade no WhatsApp da agência, então precisa aparecer lá igual
   // qualquer outra conversa (só sem client_id, já que é a equipe falando
   // com o Hermes, não um cliente).
-  await upsertInternalConversation(supabase, workspaceId, payload.phone, operator.name, [
+  await upsertInternalConversation(supabase, workspaceId, payload.phone, operator.name, 'internal', [
     { direction: 'inbound', content: payload.message, isAi: false },
     { direction: 'outbound', content: reply, isAi: true },
   ])
@@ -2563,6 +2591,7 @@ async function upsertInternalConversation(
   workspaceId: string,
   phone: string,
   contactName: string | null,
+  kind: 'internal' | 'unknown',
   turns: Array<{ direction: 'inbound' | 'outbound'; content: string; isAi: boolean }>,
 ) {
   try {
@@ -2590,6 +2619,10 @@ async function upsertInternalConversation(
         .from('conversations')
         .update({
           contact_name: contactName ?? undefined,
+          // Se antes não sabíamos quem era (unknown) e agora resolveu pra
+          // cliente/operador verificado (internal), promove a conversa em
+          // vez de deixar presa como "desconhecido" pra sempre.
+          kind,
           status: 'open',
           last_message_at: new Date().toISOString(),
           updated_at: new Date().toISOString(),
@@ -2601,7 +2634,7 @@ async function upsertInternalConversation(
         .insert({
           workspace_id: workspaceId,
           client_id: null,
-          kind: 'internal',
+          kind,
           channel: 'whatsapp',
           contact_phone: phone,
           contact_name: contactName,

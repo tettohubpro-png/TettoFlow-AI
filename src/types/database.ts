@@ -421,7 +421,7 @@ export interface Conversation {
   id: string
   workspace_id: string
   client_id: string | null
-  kind: 'client' | 'internal'
+  kind: 'client' | 'internal' | 'unknown'
   channel: ConversationChannel
   contact_phone: string | null
   contact_name: string | null

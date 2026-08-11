@@ -5,6 +5,7 @@ import {
   Bot,
   Building2,
   Clock,
+  HelpCircle,
   Mail,
   MessageCircle,
   Phone,
@@ -158,6 +159,11 @@ function ConversationList({
                       <Building2 size={10} /> Equipe
                     </span>
                   )}
+                  {c.kind === 'unknown' && (
+                    <span className="flex items-center gap-1 rounded-full bg-amber-500/15 px-1.5 py-0.5 text-[10px] text-amber-300">
+                      <HelpCircle size={10} /> Não identificado
+                    </span>
+                  )}
                   {c.handoff_required && <AlertTriangle size={14} className="text-amber-400" />}
                 </div>
               </div>
@@ -231,6 +237,7 @@ function Thread({
           <p className="truncate text-xs text-slate-500">
             {conversation.contact_phone}
             {conversation.kind === 'internal' && ' · conversa interna da equipe'}
+            {conversation.kind === 'unknown' && ' · número não identificado'}
           </p>
         </div>
         {conversation.handoff_required && (
@@ -328,20 +335,33 @@ function Thread({
 }
 
 function InternalContextPanel({ conversation }: { conversation: Conversation }) {
+  const isUnknown = conversation.kind === 'unknown'
   return (
     <div className="flex h-full flex-col gap-5 p-4 text-sm">
       <section>
         <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
-          Conversa interna
+          {isUnknown ? 'Contato não identificado' : 'Conversa interna'}
         </p>
         <p className="flex items-center gap-2 font-medium">
-          <Building2 size={14} className="text-slate-500" />
+          {isUnknown ? (
+            <HelpCircle size={14} className="text-amber-400" />
+          ) : (
+            <Building2 size={14} className="text-slate-500" />
+          )}
           {conversation.contact_name ?? 'Membro da equipe'}
         </p>
-        <p className="mt-2 text-xs text-slate-500">
-          Não é uma conversa com cliente — é o Hermes falando com alguém da equipe (ou uma
-          mensagem enviada pelo Hermes a pedido de alguém), pelo número da agência.
-        </p>
+        {isUnknown ? (
+          <p className="mt-2 text-xs text-amber-300/90">
+            Esse número não bateu com nenhum cliente nem operador cadastrado — pode ser um
+            cliente novo, um lead, ou alguém que precisa ser cadastrado. Vale a pena identificar
+            quem é.
+          </p>
+        ) : (
+          <p className="mt-2 text-xs text-slate-500">
+            Não é uma conversa com cliente — é o Hermes falando com alguém da equipe (ou uma
+            mensagem enviada pelo Hermes a pedido de alguém), pelo número da agência.
+          </p>
+        )}
       </section>
 
       <section className="space-y-1">

@@ -536,6 +536,7 @@ async function resolveClient(
 // agent_actions_log.
 
 const HERMES_WRITE_TOOLS = new Set([
+  'send_message',
   'create_client',
   'update_client',
   'create_task',
@@ -667,6 +668,21 @@ const HERMES_TOOLS = [
     },
   },
   {
+    name: 'send_message',
+    description:
+      'ESCRITA. Envia uma mensagem de WhatsApp em nome da agência pra um funcionário da equipe, pra um cliente, ou pra um número direto. Informe exatamente UM entre to_team_member_name, to_client_name ou to_phone.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        to_team_member_name: { type: 'string', description: 'Nome do funcionário/membro da equipe.' },
+        to_client_name: { type: 'string', description: 'Nome do cliente (usa o contato principal cadastrado).' },
+        to_phone: { type: 'string', description: 'Número direto (com DDI), se não for time nem cliente cadastrado.' },
+        message: { type: 'string', description: 'Texto da mensagem a enviar.' },
+      },
+      required: ['message'],
+    },
+  },
+  {
     name: 'delete_client',
     description:
       'ESCRITA — AÇÃO RESTRITA E IRREVERSÍVEL. Apaga um ou MAIS clientes definitivamente (dados cadastrais, contatos, memórias, operações, tarefas ligadas, conversas, financeiro — tudo). Se o pedido envolver vários clientes de uma vez ("apaga esses 3 clientes de teste"), liste todos em UMA ÚNICA chamada (array "clients") — não chame essa ferramenta várias vezes na mesma resposta, e não pergunte confirmação você mesmo em texto: chame a ferramenta e o sistema cuida de pedir confirmação. Só o dono da agência pode aprovar essa ação; se qualquer outra pessoa pedir, recuse educadamente e diga que só o dono pode autorizar isso.',
@@ -790,7 +806,7 @@ Você tem memória das últimas mensagens dessa conversa (aparecem no histórico
 Regras:
 1. Para qualquer pedido envolvendo um cliente específico, use search_clients primeiro se você não tiver o client_id — nunca invente um ID. Antes de usar create_client, sempre rode search_clients pelo nome primeiro: se já existir algo parecido, use update_client nesse cliente em vez de criar outro (o sistema também bloqueia duplicata por telefone/nome como segurança extra, mas não confie só nisso).
 2. Ferramentas de LEITURA (search_clients, get_client_summary) você pode chamar livremente para reunir contexto.
-3. Ferramentas de ESCRITA (create_client, update_client, create_task, update_task_status, assign_task, create_operation, update_operation_status, add_operation_comment, delete_client) NUNCA são executadas na hora — ao chamar uma delas, o sistema registra a ação como pendente e te avisa. NUNCA pergunte "confirma?" em texto solto por conta própria, sem ter chamado a ferramenta — isso não registra nada e trava o fluxo. O jeito certo é: chame a ferramenta primeiro; o tool_result vai te avisar que está pendente; SÓ AÍ você escreve a pergunta de confirmação pro usuário, em uma frase, descrevendo o que vai mudar e terminando com algo como "Confirma? Responda *sim* ou *não*."
+3. Ferramentas de ESCRITA (send_message, create_client, update_client, create_task, update_task_status, assign_task, create_operation, update_operation_status, add_operation_comment, delete_client) NUNCA são executadas na hora — ao chamar uma delas, o sistema registra a ação como pendente e te avisa. NUNCA pergunte "confirma?" em texto solto por conta própria, sem ter chamado a ferramenta — isso não registra nada e trava o fluxo. O jeito certo é: chame a ferramenta primeiro; o tool_result vai te avisar que está pendente; SÓ AÍ você escreve a pergunta de confirmação pro usuário, em uma frase, descrevendo o que vai mudar e terminando com algo como "Confirma? Responda *sim* ou *não*."
 4. Chame no máximo UMA ferramenta de escrita por mensagem do usuário. Se o pedido envolve vários itens da MESMA ação (ex: apagar vários clientes de uma vez), isso ainda conta como uma chamada só — use uma ferramenta que aceite lista (como delete_client) em vez de chamar várias vezes.
 5. Respostas curtas e diretas — 1 a 3 frases, no máximo. Nada de parágrafo explicando contexto óbvio ou listando tudo que você fez passo a passo. Está no WhatsApp, não é um relatório. Só entra em mais detalhe se o usuário pedir explicitamente.
 6. Se não entender o pedido ou faltar informação (ex: qual cliente, qual tarefa), pergunte antes de agir — em uma frase curta.
@@ -1132,6 +1148,99 @@ async function executeWriteTool(
   input: Record<string, unknown>,
 ): Promise<unknown> {
   switch (toolName) {
+    case 'send_message': {
+      const message = String(input.message ?? '').trim()
+      if (!message) throw new Error('Informe o texto da mensagem.')
+
+      let targetPhone: string | null = null
+      let targetLabel = ''
+      let clientForLog: { id: string } | null = null
+
+      if (input.to_team_member_name) {
+        const { data: memberships } = await supabase
+          .from('memberships')
+          .select('users(name, whatsapp_phone)')
+          .eq('workspace_id', workspaceId)
+        const needle = String(input.to_team_member_name).toLowerCase()
+        const match = (memberships ?? [])
+          .map((m) => m.users as unknown as { name: string; whatsapp_phone: string | null } | null)
+          .find((u) => u?.name?.toLowerCase().includes(needle))
+        if (!match) throw new Error(`Não achei ninguém da equipe chamado "${input.to_team_member_name}".`)
+        if (!match.whatsapp_phone) throw new Error(`"${match.name}" não tem WhatsApp cadastrado como operador.`)
+        targetPhone = match.whatsapp_phone
+        targetLabel = match.name
+      } else if (input.to_client_name) {
+        const clientRef = await resolveClientRef(supabase, workspaceId, {
+          client_name: input.to_client_name as string,
+        })
+        if ('error' in clientRef) throw new Error(clientRef.error)
+        const { data: contact } = await supabase
+          .from('client_contacts')
+          .select('phone, name')
+          .eq('client_id', clientRef.id)
+          .eq('is_primary', true)
+          .maybeSingle()
+        if (!contact?.phone) throw new Error('Esse cliente não tem telefone de contato cadastrado.')
+        targetPhone = contact.phone as string
+        targetLabel = (contact.name as string | undefined) ?? String(input.to_client_name)
+        clientForLog = { id: clientRef.id }
+      } else if (input.to_phone) {
+        targetPhone = String(input.to_phone)
+        targetLabel = targetPhone
+      } else {
+        throw new Error('Informe to_team_member_name, to_client_name ou to_phone.')
+      }
+
+      await sendEvolutionText(undefined, targetPhone, message)
+
+      // Se foi pra um cliente, também registra na thread do Inbox (mesma
+      // lógica de logConversation) pra aparecer na tela de Mensagens do CRM.
+      if (clientForLog) {
+        const { data: existing } = await supabase
+          .from('conversations')
+          .select('id')
+          .eq('client_id', clientForLog.id)
+          .eq('channel', 'whatsapp')
+          .eq('contact_phone', targetPhone)
+          .maybeSingle()
+
+        let conversationId = existing?.id as string | undefined
+        if (conversationId) {
+          await supabase
+            .from('conversations')
+            .update({ last_message_at: new Date().toISOString(), updated_at: new Date().toISOString() })
+            .eq('id', conversationId)
+        } else {
+          const { data: created } = await supabase
+            .from('conversations')
+            .insert({
+              workspace_id: workspaceId,
+              client_id: clientForLog.id,
+              channel: 'whatsapp',
+              contact_phone: targetPhone,
+              status: 'open',
+              handoff_required: false,
+              last_message_at: new Date().toISOString(),
+            })
+            .select('id')
+            .single()
+          conversationId = created?.id as string | undefined
+        }
+        if (conversationId) {
+          await supabase.from('conversation_messages').insert({
+            workspace_id: workspaceId,
+            conversation_id: conversationId,
+            client_id: clientForLog.id,
+            direction: 'outbound',
+            content: message,
+            is_ai: true,
+          })
+        }
+      }
+
+      return { sent: true, to: targetLabel }
+    }
+
     case 'create_client': {
       const name = String(input.name ?? '').trim()
       if (!name) throw new Error('Informe o nome do cliente.')
@@ -1378,6 +1487,8 @@ function interpretConfirmation(message: string): 'yes' | 'no' | 'unclear' {
 function summarizeWriteResult(toolName: string, result: unknown): string {
   const r = (result ?? {}) as Record<string, unknown>
   switch (toolName) {
+    case 'send_message':
+      return `Mensagem enviada pra ${(r.to as string | undefined) ?? 'contato'}.`
     case 'create_client':
       return `Cliente "${(r.client as { name?: string } | undefined)?.name ?? ''}" cadastrado.`
     case 'update_client':

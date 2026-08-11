@@ -7,12 +7,14 @@ import {
   Mail,
   MessageCircle,
   Phone,
+  Send,
   User,
   X,
 } from 'lucide-react'
 import { useConversations, useConversationMessages } from '@/hooks/useConversations'
 import { useClientMemory } from '@/hooks/useClientMemory'
 import { useOperations } from '@/hooks/useOperations'
+import { supabase } from '@/lib/supabase'
 import type { Conversation } from '@/types/database'
 
 export function InboxPage() {
@@ -166,7 +168,27 @@ function Thread({
   onBack: () => void
   onOpenInfo: () => void
 }) {
-  const { messages, loading } = useConversationMessages(conversation.id)
+  const { messages, loading, refresh } = useConversationMessages(conversation.id)
+  const [draft, setDraft] = useState('')
+  const [sending, setSending] = useState(false)
+  const [sendError, setSendError] = useState<string | null>(null)
+
+  const handleSend = async () => {
+    const content = draft.trim()
+    if (!content || sending) return
+    setSending(true)
+    setSendError(null)
+    const { error } = await supabase.functions.invoke('send-message', {
+      body: { conversation_id: conversation.id, content },
+    })
+    setSending(false)
+    if (error) {
+      setSendError('Não consegui enviar. Tenta de novo.')
+      return
+    }
+    setDraft('')
+    refresh()
+  }
 
   return (
     <>
@@ -245,6 +267,34 @@ function Thread({
             </div>
           </div>
         ))}
+      </div>
+
+      <div className="border-t border-slate-800 p-3">
+        {sendError && <p className="mb-2 text-xs text-red-400">{sendError}</p>}
+        <div className="flex items-end gap-2">
+          <textarea
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault()
+                handleSend()
+              }
+            }}
+            placeholder="Digite uma mensagem…"
+            rows={1}
+            className="max-h-32 flex-1 resize-none rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-200 placeholder:text-slate-600 focus:border-emerald-500 focus:outline-none"
+          />
+          <button
+            type="button"
+            onClick={handleSend}
+            disabled={!draft.trim() || sending}
+            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-emerald-600 text-white transition hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-40"
+            aria-label="Enviar"
+          >
+            <Send size={16} />
+          </button>
+        </div>
       </div>
     </>
   )

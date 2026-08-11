@@ -60,6 +60,30 @@ export function useConversations() {
     fetchConversations()
   }, [fetchConversations])
 
+  // Realtime: nova mensagem (do cliente, do Hermes, ou de outra aba) atualiza
+  // a lista/preview sem precisar recarregar a página.
+  useEffect(() => {
+    if (!workspace?.id) return
+
+    const channel = supabase
+      .channel(`conversations-realtime-${workspace.id}`)
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'conversations', filter: `workspace_id=eq.${workspace.id}` },
+        () => fetchConversations(),
+      )
+      .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'conversation_messages', filter: `workspace_id=eq.${workspace.id}` },
+        () => fetchConversations(),
+      )
+      .subscribe()
+
+    return () => {
+      supabase.removeChannel(channel)
+    }
+  }, [workspace?.id, fetchConversations])
+
   return { conversations, previews, loading, error, refresh: fetchConversations }
 }
 
@@ -93,6 +117,23 @@ export function useConversationMessages(conversationId: string | undefined) {
   useEffect(() => {
     fetchMessages()
   }, [fetchMessages])
+
+  useEffect(() => {
+    if (!conversationId) return
+
+    const channel = supabase
+      .channel(`conversation-messages-realtime-${conversationId}`)
+      .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'conversation_messages', filter: `conversation_id=eq.${conversationId}` },
+        () => fetchMessages(),
+      )
+      .subscribe()
+
+    return () => {
+      supabase.removeChannel(channel)
+    }
+  }, [conversationId, fetchMessages])
 
   return { messages, loading, error, refresh: fetchMessages }
 }

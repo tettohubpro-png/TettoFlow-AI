@@ -536,6 +536,7 @@ async function resolveClient(
 // agent_actions_log.
 
 const HERMES_WRITE_TOOLS = new Set([
+  'create_client',
   'update_client',
   'create_task',
   'update_task_status',
@@ -590,6 +591,35 @@ const HERMES_TOOLS = [
         client_id: { type: 'string', description: 'UUID do cliente (obtido via search_clients).' },
       },
       required: ['client_id'],
+    },
+  },
+  {
+    name: 'create_client',
+    description:
+      'ESCRITA. Cadastra um cliente novo no CRM. Use sempre que pedirem pra "cadastrar", "adicionar" ou "criar" um cliente/lead novo. Preencha o máximo de informação possível: se vier link de Instagram, WhatsApp, endereço, link de localização, etc., coloque tudo em "notes" de forma organizada (não perca nenhum dado que a pessoa mandou, mesmo que não caiba em um campo específico).',
+    input_schema: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', description: 'Nome do cliente/empresa.' },
+        status: {
+          type: 'string',
+          enum: CLIENT_STATUSES,
+          description: 'Padrão: ACTIVE (cliente fechado). Use INACTIVE só se for um lead ainda não fechado.',
+        },
+        segment: { type: 'string', description: 'Segmento/ramo de atuação, se souber.' },
+        city: { type: 'string' },
+        state: { type: 'string' },
+        origin: { type: 'string', description: 'De onde veio o cliente (indicação, Instagram, etc.).' },
+        notes: {
+          type: 'string',
+          description:
+            'Observações livres — endereço, links (Instagram, Google Maps), e qualquer outra informação relevante mandada junto.',
+        },
+        contact_name: { type: 'string', description: 'Nome da pessoa de contato, se for diferente do nome do cliente.' },
+        contact_phone: { type: 'string', description: 'WhatsApp/telefone de contato do cliente, com DDI se possível.' },
+        contact_email: { type: 'string' },
+      },
+      required: ['name'],
     },
   },
   {
@@ -1055,6 +1085,41 @@ async function executeWriteTool(
   input: Record<string, unknown>,
 ): Promise<unknown> {
   switch (toolName) {
+    case 'create_client': {
+      const name = String(input.name ?? '').trim()
+      if (!name) throw new Error('Informe o nome do cliente.')
+
+      const { data: client, error: clientErr } = await supabase
+        .from('clients')
+        .insert({
+          workspace_id: workspaceId,
+          name,
+          status: (input.status as string | undefined) ?? 'ACTIVE',
+          segment: (input.segment as string | undefined) ?? null,
+          city: (input.city as string | undefined) ?? null,
+          state: (input.state as string | undefined) ?? null,
+          origin: (input.origin as string | undefined) ?? null,
+          notes: (input.notes as string | undefined) ?? null,
+        })
+        .select('id, name')
+        .single()
+      if (clientErr) throw new Error(clientErr.message)
+
+      if (input.contact_name || input.contact_phone || input.contact_email) {
+        const { error: contactErr } = await supabase.from('client_contacts').insert({
+          workspace_id: workspaceId,
+          client_id: client.id,
+          name: (input.contact_name as string | undefined) ?? name,
+          phone: (input.contact_phone as string | undefined) ?? null,
+          email: (input.contact_email as string | undefined) ?? null,
+          is_primary: true,
+        })
+        if (contactErr) throw new Error(`Cliente criado, mas falha ao salvar contato: ${contactErr.message}`)
+      }
+
+      return { created: true, client }
+    }
+
     case 'update_client': {
       const clientId = String(input.client_id ?? '')
       const fields: Record<string, unknown> = {}
@@ -1249,6 +1314,8 @@ function interpretConfirmation(message: string): 'yes' | 'no' | 'unclear' {
 function summarizeWriteResult(toolName: string, result: unknown): string {
   const r = (result ?? {}) as Record<string, unknown>
   switch (toolName) {
+    case 'create_client':
+      return `Cliente "${(r.client as { name?: string } | undefined)?.name ?? ''}" cadastrado.`
     case 'update_client':
       return 'Cliente atualizado.'
     case 'create_task':

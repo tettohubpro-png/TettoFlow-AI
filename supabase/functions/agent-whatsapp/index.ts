@@ -484,6 +484,64 @@ async function normalizePayload(raw: unknown): Promise<NormalizeResult> {
   return { kind: 'invalid' }
 }
 
+/** Minúsculo, sem acento, sem espaço duplicado — pra comparar nomes de forma tolerante. */
+function normalizeName(s: string): string {
+  return s
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '')
+    .toLowerCase()
+    .trim()
+    .replace(/\s+/g, ' ')
+}
+
+/** Distância de Levenshtein simples (sem libs) — número de edições pra ir de a até b. */
+function levenshtein(a: string, b: string): number {
+  const m = a.length
+  const n = b.length
+  if (m === 0) return n
+  if (n === 0) return m
+  const prev = new Array(n + 1)
+  const curr = new Array(n + 1)
+  for (let j = 0; j <= n; j++) prev[j] = j
+  for (let i = 1; i <= m; i++) {
+    curr[0] = i
+    for (let j = 1; j <= n; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1
+      curr[j] = Math.min(curr[j - 1] + 1, prev[j] + 1, prev[j - 1] + cost)
+    }
+    for (let j = 0; j <= n; j++) prev[j] = curr[j]
+  }
+  return prev[n]
+}
+
+/**
+ * Compara um nome dito/transcrito (needle) contra um nome cadastrado
+ * (candidate) de forma tolerante a erro de digitação/transcrição de áudio
+ * (ex: "Carol" vs "Karol", "Carlos Jefferson" vs "Carlos Jeffeson") — antes
+ * era só substring exata, e qualquer diferença de uma letra fazia o Hermes
+ * dizer "não encontrei ninguém" mesmo com a pessoa certa cadastrada.
+ * Estratégia: substring nos dois sentidos primeiro (caso comum, barato);
+ * senão compara palavra a palavra com distância de edição pequena — pega
+ * nome ou sobrenome parecido mesmo que o resto não bata exatamente.
+ */
+function fuzzyNameMatch(needle: string, candidate: string): boolean {
+  const a = normalizeName(needle)
+  const b = normalizeName(candidate)
+  if (!a || !b) return false
+  if (b.includes(a) || a.includes(b)) return true
+
+  const wordsA = a.split(' ').filter((w) => w.length >= 3)
+  const wordsB = b.split(' ').filter((w) => w.length >= 3)
+  for (const wa of wordsA) {
+    for (const wb of wordsB) {
+      if (wa === wb || wa.includes(wb) || wb.includes(wa)) return true
+      const maxDist = wa.length <= 4 || wb.length <= 4 ? 1 : 2
+      if (levenshtein(wa, wb) <= maxDist) return true
+    }
+  }
+  return false
+}
+
 /**
  * Gera todas as variações plausíveis de um número de telefone BR pra
  * comparação: com/sem DDI (55) e com/sem o 9º dígito do celular. O WhatsApp
@@ -1083,15 +1141,27 @@ async function resolveClientRef(
       .eq('workspace_id', workspaceId)
       .ilike('name', `%${input.client_name}%`)
       .limit(2)
-    if (!data || data.length === 0) {
-      return { error: `Nenhum cliente encontrado com o nome "${input.client_name}".` }
-    }
-    if (data.length > 1) {
+    if (data && data.length === 1) return { id: data[0].id as string }
+    if (data && data.length > 1) {
       return {
         error: `Mais de um cliente encontrado com o nome "${input.client_name}" — use search_clients e informe o client_id.`,
       }
     }
-    return { id: data[0].id as string }
+
+    // ILIKE (substring exata) não achou nada — tenta de novo tolerando erro
+    // de digitação/transcrição de áudio (ex: nome com uma letra diferente).
+    const { data: allClients } = await supabase
+      .from('clients')
+      .select('id, name')
+      .eq('workspace_id', workspaceId)
+    const fuzzy = (allClients ?? []).filter((c) => fuzzyNameMatch(input.client_name!, c.name as string))
+    if (fuzzy.length === 1) return { id: fuzzy[0].id as string }
+    if (fuzzy.length > 1) {
+      return {
+        error: `Mais de um cliente parecido com o nome "${input.client_name}" — use search_clients e informe o client_id.`,
+      }
+    }
+    return { error: `Nenhum cliente encontrado com o nome "${input.client_name}".` }
   }
   return { error: 'Informe client_id ou client_name.' }
 }
@@ -1107,10 +1177,9 @@ async function resolveUserRef(
       .from('memberships')
       .select('user_id, users(id, name)')
       .eq('workspace_id', workspaceId)
-    const needle = input.assignee_name.toLowerCase()
     const matches = (memberships ?? []).filter((m) => {
       const u = m.users as unknown as { name: string } | null
-      return u?.name?.toLowerCase().includes(needle)
+      return u?.name ? fuzzyNameMatch(input.assignee_name!, u.name) : false
     })
     if (matches.length === 0) {
       return { error: `Nenhum membro da equipe encontrado com o nome "${input.assignee_name}".` }
@@ -1301,10 +1370,10 @@ async function executeWriteTool(
           .from('memberships')
           .select('users(name, whatsapp_phone)')
           .eq('workspace_id', workspaceId)
-        const needle = String(input.to_team_member_name).toLowerCase()
+        const teamNeedle = String(input.to_team_member_name)
         const match = (memberships ?? [])
           .map((m) => m.users as unknown as { name: string; whatsapp_phone: string | null } | null)
-          .find((u) => u?.name?.toLowerCase().includes(needle))
+          .find((u) => (u?.name ? fuzzyNameMatch(teamNeedle, u.name) : false))
         if (!match) throw new Error(`Não achei ninguém da equipe chamado "${input.to_team_member_name}".`)
         if (!match.whatsapp_phone) throw new Error(`"${match.name}" não tem WhatsApp cadastrado como operador.`)
         targetPhone = match.whatsapp_phone
@@ -1319,10 +1388,9 @@ async function executeWriteTool(
           .from('memberships')
           .select('users(name)')
           .eq('workspace_id', workspaceId)
-        const staffNeedle = String(input.to_client_name).toLowerCase()
         const staffMatch = (staffMemberships ?? [])
           .map((m) => m.users as unknown as { name: string } | null)
-          .find((u) => u?.name && (u.name.toLowerCase().includes(staffNeedle) || staffNeedle.includes(u.name.toLowerCase())))
+          .find((u) => (u?.name ? fuzzyNameMatch(String(input.to_client_name), u.name) : false))
         if (staffMatch) {
           throw new Error(
             `"${input.to_client_name}" é da equipe (${staffMatch.name}), não um cliente — use to_team_member_name em vez de to_client_name.`,

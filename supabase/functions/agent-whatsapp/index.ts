@@ -257,8 +257,13 @@ Deno.serve(async (req) => {
       client.status === 'INACTIVE' ? await getIntakeMemory(supabase, client.id) : null
 
     if (intakeMemory) {
-      const result = await handleLeadIntake(groqKey, intakeMemory, payload.message)
-      await saveIntakeProgress(supabase, client, intakeMemory.id, result, instance)
+      const withinHours = isBusinessHours(new Date())
+      const result = withinHours
+        ? await handleLeadIntake(groqKey, intakeMemory, payload.message)
+        : { reply: OFF_HOURS_MESSAGE, done: false, data: intakeMemory.data }
+      if (withinHours) {
+        await saveIntakeProgress(supabase, client, intakeMemory.id, result, instance)
+      }
       await logConversation(supabase, client, payload, result.reply, false)
       await sendEvolutionText(instance, payload.phone, result.reply)
       await sendEvolutionPresence(instance, payload.phone, 'paused')
@@ -317,7 +322,9 @@ Deno.serve(async (req) => {
     }
 
     let reply: string
-    if (groqKey) {
+    if (!isBusinessHours(new Date())) {
+      reply = OFF_HOURS_MESSAGE
+    } else if (groqKey) {
       reply = await generateWithGroq(groqKey, {
         clientName: client.name,
         message: payload.message,
@@ -2076,6 +2083,26 @@ function needsHandoff(segment: string, text: string) {
  * a mesma conversa do mesmo dia, retorna null: o agente não deve cumprimentar
  * de novo nem tratar como primeiro contato.
  */
+// Horário comercial da TettoHub (horário de Brasília, UTC-3): seg-sex,
+// 8h30-12h e 14h-17h. Fora disso, o bot não gera resposta com IA — só avisa
+// o horário de atendimento (a mensagem do cliente continua sendo salva
+// normalmente pra equipe ver quando voltar).
+function isBusinessHours(now: Date): boolean {
+  const BRAZIL_OFFSET_MIN = -3 * 60
+  const local = new Date(now.getTime() + BRAZIL_OFFSET_MIN * 60000)
+  const day = local.getUTCDay() // 0 = domingo ... 6 = sábado
+  if (day === 0 || day === 6) return false
+  const minutes = local.getUTCHours() * 60 + local.getUTCMinutes()
+  const morning = minutes >= 8 * 60 + 30 && minutes < 12 * 60
+  const afternoon = minutes >= 14 * 60 && minutes < 17 * 60
+  return morning || afternoon
+}
+
+const OFF_HOURS_MESSAGE = `🕐 Nosso horário de atendimento:
+Segunda a sexta: 8h30 às 12h e de 14h às 17h
+
+Assim que retornarmos, daremos continuidade ao seu atendimento 😀`
+
 function greetingIfNewDay(lastMessageAt: string | null | undefined): string | null {
   const BRAZIL_OFFSET_MIN = -3 * 60
   const now = new Date()

@@ -561,10 +561,14 @@ const HERMES_WRITE_TOOLS = new Set([
   'delete_client',
 ])
 
-// Ação restrita: só essa conta pode acionar delete_client, mesmo entre
-// operadores com papel OWNER. Exclusão de cliente é DELETE definitivo
-// (não arquivamento) — decisão explícita do dono da agência.
-const DELETE_CLIENT_AUTHORIZED_USER_ID = '529a59e0-f2c6-45a3-bee9-9eaf7f6d1083'
+// Ações restritas: só essa conta (o dono da TettoHub) pode acioná-las, mesmo
+// entre operadores cadastrados. delete_client é DELETE definitivo; send_message
+// manda mensagem em nome da agência pelo número oficial pra qualquer
+// funcionário ou cliente — nenhum dos dois pode ficar na mão de quem não é
+// o dono (reportado em uso: outro operador pediu e o Hermes mandou mensagem
+// pro dono sem autorização).
+const OWNER_RESTRICTED_USER_ID = '529a59e0-f2c6-45a3-bee9-9eaf7f6d1083'
+const OWNER_ONLY_TOOLS = new Set(['delete_client', 'send_message'])
 
 const OPERATION_STATUSES = [
   'DRAFT',
@@ -683,7 +687,7 @@ const HERMES_TOOLS = [
   {
     name: 'send_message',
     description:
-      'ESCRITA. Envia uma mensagem de WhatsApp em nome da agência pra um funcionário da equipe, pra um cliente, ou pra um número direto. Informe exatamente UM entre to_team_member_name, to_client_name ou to_phone.',
+      'ESCRITA — AÇÃO RESTRITA. Envia uma mensagem de WhatsApp em nome da agência (pelo número oficial) pra um funcionário da equipe, pra um cliente, ou pra um número direto. Informe exatamente UM entre to_team_member_name, to_client_name ou to_phone. Só o dono da agência pode aprovar essa ação; se qualquer outra pessoa pedir, recuse educadamente e diga que só o dono pode autorizar isso.',
     input_schema: {
       type: 'object',
       properties: {
@@ -1160,6 +1164,14 @@ async function executeWriteTool(
   toolName: string,
   input: Record<string, unknown>,
 ): Promise<unknown> {
+  // Segunda camada de checagem pras ferramentas restritas ao dono — a
+  // primeira já bloqueia antes de sequer registrar como pending
+  // (runHermesAgentLoop), mas confirma de novo aqui já que essa função
+  // executa a ação de verdade.
+  if (OWNER_ONLY_TOOLS.has(toolName) && actorId !== OWNER_RESTRICTED_USER_ID) {
+    throw new Error('Não autorizado: só o dono da agência pode acionar essa ferramenta.')
+  }
+
   switch (toolName) {
     case 'send_message': {
       const message = String(input.message ?? '').trim()
@@ -1434,13 +1446,6 @@ async function executeWriteTool(
     }
 
     case 'delete_client': {
-      // Segunda camada de checagem — a primeira já bloqueia antes de sequer
-      // registrar a ação como pendente (runHermesAgentLoop), mas confirma de
-      // novo aqui já que essa função executa a exclusão de verdade.
-      if (actorId !== DELETE_CLIENT_AUTHORIZED_USER_ID) {
-        throw new Error('Não autorizado: só o dono da agência pode excluir clientes.')
-      }
-
       const refs = (input.clients as Array<{ client_id?: string; client_name?: string }> | undefined) ?? []
       if (refs.length === 0) throw new Error('Informe pelo menos um cliente em "clients".')
 
@@ -1636,7 +1641,7 @@ async function runHermesAgentLoop(
 
     for (const block of toolUseBlocks) {
       if (HERMES_WRITE_TOOLS.has(block.name)) {
-        if (block.name === 'delete_client' && operator.id !== DELETE_CLIENT_AUTHORIZED_USER_ID) {
+        if (OWNER_ONLY_TOOLS.has(block.name) && operator.id !== OWNER_RESTRICTED_USER_ID) {
           await logAgentAction(supabase, {
             workspaceId,
             actorUserId: operator.id,
@@ -1644,13 +1649,13 @@ async function runHermesAgentLoop(
             toolName: block.name,
             input: block.input,
             status: 'failed',
-            error: 'Não autorizado: só o dono da agência pode excluir clientes.',
+            error: 'Não autorizado: só o dono da agência pode acionar essa ferramenta.',
           })
           toolResults.push({
             type: 'tool_result',
             tool_use_id: block.id,
             content:
-              'NÃO AUTORIZADO: essa pessoa não é o dono da agência. Recuse o pedido educadamente, em uma frase, explicando que só o dono pode aprovar exclusão de cliente.',
+              'NÃO AUTORIZADO: essa pessoa não é o dono da agência. Recuse o pedido educadamente, em uma frase, explicando que só o dono pode autorizar isso.',
           })
           continue
         }

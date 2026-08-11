@@ -559,6 +559,7 @@ const OPERATION_STATUSES = [
 const TASK_STATUSES = ['backlog', 'todo', 'in_progress', 'done']
 const PRIORITIES = ['LOW', 'MEDIUM', 'HIGH', 'CRITICAL']
 const CLIENT_STATUSES = ['ACTIVE', 'INACTIVE', 'ARCHIVED']
+const JOB_ROLES = ['gerente', 'gestor', 'social_media', 'design', 'videomaker', 'photographer', 'video_editor', 'traffic']
 
 const HERMES_TOOLS = [
   {
@@ -607,7 +608,8 @@ const HERMES_TOOLS = [
   },
   {
     name: 'create_task',
-    description: 'ESCRITA. Cria uma tarefa no quadro de Tarefas do workspace.',
+    description:
+      'ESCRITA. Cria uma tarefa no quadro de Tarefas do workspace. Se souber o responsável, use assignee_id/assignee_name; se só souber o TIPO de serviço (ex: criar arte pra post, gravação, edição de vídeo), use department — o sistema escolhe automaticamente alguém da equipe com essa função. Ex: arte/post → design; gravação → videomaker (mencione no description se precisa de apoio do social media); edição → video_editor; tráfego pago → traffic.',
     input_schema: {
       type: 'object',
       properties: {
@@ -617,9 +619,31 @@ const HERMES_TOOLS = [
         operation_id: { type: 'string', description: 'UUID da operação relacionada, se houver.' },
         assignee_id: { type: 'string', description: 'UUID do responsável, se já souber.' },
         assignee_name: { type: 'string', description: 'Nome do responsável, se não souber o UUID.' },
+        department: {
+          type: 'string',
+          enum: JOB_ROLES,
+          description:
+            'Função/departamento responsável pelo serviço, quando não se sabe quem especificamente (o sistema escolhe alguém da equipe com essa função). Ignorado se assignee_id/assignee_name forem informados.',
+        },
         due_date: { type: 'string', description: 'Data de vencimento no formato YYYY-MM-DD.' },
       },
       required: ['title'],
+    },
+  },
+  {
+    name: 'check_messages',
+    description:
+      'LEITURA. Lista as conversas de clientes no WhatsApp mais recentes (padrão: últimas 24h), mostrando quem mandou mensagem, a última mensagem e se precisa de atenção humana (handoff). Use quando o dono/gestor perguntar algo como "quem mandou mensagem hoje" ou "tem algo importante pra eu ver".',
+    input_schema: {
+      type: 'object',
+      properties: {
+        hours: { type: 'number', description: 'Janela de tempo em horas pra olhar pra trás. Padrão: 24.' },
+        only_important: {
+          type: 'boolean',
+          description: 'Se true, retorna só conversas marcadas como precisando de atenção humana. Padrão: false.',
+        },
+      },
+      required: [],
     },
   },
   {
@@ -710,8 +734,9 @@ Regras:
 2. Ferramentas de LEITURA (search_clients, get_client_summary) você pode chamar livremente para reunir contexto.
 3. Ferramentas de ESCRITA (update_client, create_task, update_task_status, assign_task, create_operation, update_operation_status, add_operation_comment) NUNCA são executadas na hora — ao chamar uma delas, o sistema apenas registra a ação como pendente. Depois de chamar uma ferramenta de escrita, pare e pergunte ao usuário, em português, se ele confirma a ação, descrevendo em uma frase o que vai mudar e terminando com algo como "Confirma? Responda *sim* ou *não*."
 4. Chame no máximo UMA ferramenta de escrita por mensagem do usuário.
-5. Seja direto e breve — está no WhatsApp, não é um relatório.
-6. Se não entender o pedido ou faltar informação (ex: qual cliente, qual tarefa), pergunte antes de agir.`
+5. Respostas curtas e diretas — 1 a 3 frases, no máximo. Nada de parágrafo explicando contexto óbvio ou listando tudo que você fez passo a passo. Está no WhatsApp, não é um relatório. Só entra em mais detalhe se o usuário pedir explicitamente.
+6. Se não entender o pedido ou faltar informação (ex: qual cliente, qual tarefa), pergunte antes de agir — em uma frase curta.
+7. Quando o usuário pedir um serviço (arte pra post, gravação, edição, tráfego) sem dizer quem deve fazer, use create_task com "department" em vez de perguntar quem é o responsável — a agência já tem gente fixa pra cada função.`
 }
 
 async function callClaudeMessages(
@@ -950,7 +975,57 @@ async function executeReadTool(
     }
   }
 
+  if (toolName === 'check_messages') {
+    const hours = Number(input.hours) > 0 ? Number(input.hours) : 24
+    const since = new Date(Date.now() - hours * 3600 * 1000).toISOString()
+
+    let query = supabase
+      .from('conversations')
+      .select('id, contact_name, contact_phone, handoff_required, last_message_at, clients(name)')
+      .eq('workspace_id', workspaceId)
+      .gte('last_message_at', since)
+      .order('last_message_at', { ascending: false })
+      .limit(15)
+    if (input.only_important === true) query = query.eq('handoff_required', true)
+
+    const { data: convs } = await query
+    const results: Array<Record<string, unknown>> = []
+    for (const c of convs ?? []) {
+      const { data: lastMsg } = await supabase
+        .from('conversation_messages')
+        .select('content')
+        .eq('conversation_id', c.id as string)
+        .eq('direction', 'inbound')
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle()
+      results.push({
+        client_name: (c.clients as { name?: string } | null)?.name ?? c.contact_name ?? 'desconhecido',
+        contact_phone: c.contact_phone,
+        last_message_at: c.last_message_at,
+        needs_attention: c.handoff_required,
+        last_message_preview: (lastMsg?.content as string | undefined)?.slice(0, 150) ?? null,
+      })
+    }
+    return { conversations: results, count: results.length }
+  }
+
   return { error: `Ferramenta desconhecida: ${toolName}` }
+}
+
+async function resolveDepartmentAssignee(
+  supabase: ReturnType<typeof createClient>,
+  workspaceId: string,
+  jobRole: string,
+): Promise<string | null> {
+  const { data } = await supabase
+    .from('memberships')
+    .select('user_id')
+    .eq('workspace_id', workspaceId)
+    .eq('job_role', jobRole)
+    .limit(1)
+    .maybeSingle()
+  return (data?.user_id as string | undefined) ?? null
 }
 
 async function executeWriteTool(
@@ -986,6 +1061,10 @@ async function executeWriteTool(
         assignee_name: input.assignee_name as string | undefined,
       })
       if ('error' in assignee) throw new Error(assignee.error)
+      let assigneeId = assignee.id
+      if (!assigneeId && input.department) {
+        assigneeId = await resolveDepartmentAssignee(supabase, workspaceId, String(input.department))
+      }
       const { data, error } = await supabase
         .from('tasks')
         .insert({
@@ -994,7 +1073,7 @@ async function executeWriteTool(
           description: (input.description as string | undefined) ?? null,
           priority: (input.priority as string | undefined) ?? 'MEDIUM',
           operation_id: (input.operation_id as string | undefined) ?? null,
-          assignee_id: assignee.id,
+          assignee_id: assigneeId,
           due_date: (input.due_date as string | undefined) ?? null,
           created_by: actorId,
         })

@@ -779,7 +779,7 @@ Seu papel: ajudar a equipe a consultar e atualizar o CRM (clientes, tarefas, ope
 Você tem memória das últimas mensagens dessa conversa (aparecem no histórico abaixo) — use esse contexto pra entender pedidos que fazem referência a algo dito antes ("aquele cliente", "a tarefa que criei"), sem precisar que a pessoa repita tudo.
 
 Regras:
-1. Para qualquer pedido envolvendo um cliente específico, use search_clients primeiro se você não tiver o client_id — nunca invente um ID.
+1. Para qualquer pedido envolvendo um cliente específico, use search_clients primeiro se você não tiver o client_id — nunca invente um ID. Antes de usar create_client, sempre rode search_clients pelo nome primeiro: se já existir algo parecido, use update_client nesse cliente em vez de criar outro (o sistema também bloqueia duplicata por telefone/nome como segurança extra, mas não confie só nisso).
 2. Ferramentas de LEITURA (search_clients, get_client_summary) você pode chamar livremente para reunir contexto.
 3. Ferramentas de ESCRITA (update_client, create_task, update_task_status, assign_task, create_operation, update_operation_status, add_operation_comment) NUNCA são executadas na hora — ao chamar uma delas, o sistema apenas registra a ação como pendente. Depois de chamar uma ferramenta de escrita, pare e pergunte ao usuário, em português, se ele confirma a ação, descrevendo em uma frase o que vai mudar e terminando com algo como "Confirma? Responda *sim* ou *não*."
 4. Chame no máximo UMA ferramenta de escrita por mensagem do usuário.
@@ -1077,6 +1077,44 @@ async function resolveDepartmentAssignee(
   return (data?.user_id as string | undefined) ?? null
 }
 
+/**
+ * Checa se já existe um cliente parecido antes de criar um novo — por
+ * telefone de contato (mais confiável, usa as mesmas variações de 9º
+ * dígito/DDI de phoneVariants) e, se não achar, por nome (ILIKE parcial).
+ * Evita a duplicidade reportada em uso real: o agente cadastrando o mesmo
+ * cliente duas vezes.
+ */
+async function findSimilarClient(
+  supabase: ReturnType<typeof createClient>,
+  workspaceId: string,
+  name: string,
+  contactPhone?: string,
+): Promise<{ id: string; name: string; status: string } | null> {
+  if (contactPhone) {
+    const variants = phoneVariants(contactPhone)
+    if (variants.length > 0) {
+      const orFilter = variants.flatMap((v) => [`phone.eq.${v}`, `phone.ilike.%${v}`]).join(',')
+      const { data: contacts } = await supabase
+        .from('client_contacts')
+        .select('clients(id, name, status)')
+        .eq('workspace_id', workspaceId)
+        .not('phone', 'is', null)
+        .or(orFilter)
+        .limit(1)
+      const match = contacts?.[0]?.clients as unknown as { id: string; name: string; status: string } | undefined
+      if (match?.id) return match
+    }
+  }
+
+  const { data: byName } = await supabase
+    .from('clients')
+    .select('id, name, status')
+    .eq('workspace_id', workspaceId)
+    .ilike('name', `%${name}%`)
+    .limit(1)
+  return (byName?.[0] as { id: string; name: string; status: string } | undefined) ?? null
+}
+
 async function executeWriteTool(
   supabase: ReturnType<typeof createClient>,
   workspaceId: string,
@@ -1088,6 +1126,18 @@ async function executeWriteTool(
     case 'create_client': {
       const name = String(input.name ?? '').trim()
       if (!name) throw new Error('Informe o nome do cliente.')
+
+      const existing = await findSimilarClient(
+        supabase,
+        workspaceId,
+        name,
+        input.contact_phone as string | undefined,
+      )
+      if (existing) {
+        throw new Error(
+          `Já existe um cliente parecido cadastrado: "${existing.name}" (status ${existing.status}). Não criei outro pra evitar duplicidade — use update_client nesse cliente (id ${existing.id}) se for o caso, ou confirme com a pessoa se é realmente um cliente diferente antes de tentar de novo.`,
+        )
+      }
 
       const { data: client, error: clientErr } = await supabase
         .from('clients')

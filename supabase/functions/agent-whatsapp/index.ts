@@ -281,6 +281,18 @@ Deno.serve(async (req) => {
       .order('importance', { ascending: false })
       .limit(8)
 
+    // Só cumprimenta ("bom dia" etc.) na primeira mensagem do dia — se a
+    // conversa é continuação do mesmo dia, vai direto ao ponto sem saudação
+    // nem repetir o nome do cliente.
+    const { data: existingConv } = await supabase
+      .from('conversations')
+      .select('last_message_at')
+      .eq('client_id', client.id)
+      .eq('channel', 'whatsapp')
+      .eq('contact_phone', payload.phone)
+      .maybeSingle()
+    const greeting = greetingIfNewDay(existingConv?.last_message_at as string | null | undefined)
+
     const route = routeIntent(payload.message)
     const segment = inferSegment(memories ?? [])
     const compliance = needsHandoff(segment, payload.message)
@@ -312,9 +324,10 @@ Deno.serve(async (req) => {
         memories: memories ?? [],
         department: route.department,
         departmentLabel: DEPARTMENT_LABELS[route.department],
+        greeting,
       })
     } else {
-      reply = fallbackReply(client.name, route.department, payload.message)
+      reply = fallbackReply(client.name, route.department, payload.message, greeting)
     }
 
     let operationId: string | null = null
@@ -2051,12 +2064,43 @@ function needsHandoff(segment: string, text: string) {
   return { handoff: false, reason: null }
 }
 
-function fallbackReply(clientName: string, department: Department, message: string) {
+/**
+ * Retorna a saudação certa ("Bom dia"/"Boa tarde"/"Boa noite") só quando a
+ * última mensagem dessa conversa foi num dia diferente de hoje (horário de
+ * Brasília, UTC-3 — mesmo fuso de São Luís-MA, sem horário de verão). Se for
+ * a mesma conversa do mesmo dia, retorna null: o agente não deve cumprimentar
+ * de novo nem tratar como primeiro contato.
+ */
+function greetingIfNewDay(lastMessageAt: string | null | undefined): string | null {
+  const BRAZIL_OFFSET_MIN = -3 * 60
+  const now = new Date()
+  const toBrazilDateStr = (d: Date) => new Date(d.getTime() + BRAZIL_OFFSET_MIN * 60000).toISOString().slice(0, 10)
+
+  if (lastMessageAt) {
+    const last = new Date(lastMessageAt)
+    if (!Number.isNaN(last.getTime()) && toBrazilDateStr(last) === toBrazilDateStr(now)) {
+      return null // mesma conversa, mesmo dia — sem saudação
+    }
+  }
+
+  const hour = new Date(now.getTime() + BRAZIL_OFFSET_MIN * 60000).getUTCHours()
+  if (hour < 12) return 'Bom dia'
+  if (hour < 18) return 'Boa tarde'
+  return 'Boa noite'
+}
+
+function fallbackReply(
+  clientName: string,
+  department: Department,
+  message: string,
+  greeting: string | null,
+) {
+  const prefix = greeting ? `${greeting}! ` : ''
   if (department === 'general') {
-    return `Olá! Sou o assistente da ${clientName} / TettoHub. Li sua mensagem e estou à disposição. Como posso ajudar: posts, gravação, edição ou tráfego?`
+    return `${prefix}Sou o assistente da ${clientName} / TettoHub. Li sua mensagem e estou à disposição. Como posso ajudar: posts, gravação, edição ou tráfego?`
   }
   const who = DEPARTMENT_LABELS[department]
-  return `Perfeito! Anotei seu pedido (“${message.slice(0, 80)}”). Vou direcionar para nossa equipe de ${who}, que cuida disso. Em breve alguém retorna por aqui.`
+  return `${prefix}Perfeito! Anotei seu pedido (“${message.slice(0, 80)}”). Vou direcionar para nossa equipe de ${who}, que cuida disso. Em breve alguém retorna por aqui.`
 }
 
 async function generateWithGroq(
@@ -2067,6 +2111,7 @@ async function generateWithGroq(
     memories: { title: string; content: string; category: string }[]
     department: Department
     departmentLabel: string
+    greeting: string | null
   },
 ) {
   const memoryBlock = ctx.memories
@@ -2074,13 +2119,19 @@ async function generateWithGroq(
     .map((m) => `- [${m.category}] ${m.title}: ${m.content.slice(0, 220)}`)
     .join('\n')
 
+  const continuityInstruction = ctx.greeting
+    ? `Essa é a primeira mensagem do cliente hoje — comece a resposta com "${ctx.greeting}!" antes de responder o pedido dele.`
+    : 'Essa conversa já está em andamento hoje (não é a primeira mensagem) — NÃO cumprimente de novo (nada de "Olá"/"Oi"/"Bom dia" etc.), vá direto responder a mensagem.'
+
   const system = `Você é o assistente de WhatsApp da agência TettoHub, atendendo o cliente "${ctx.clientName}".
 Tom: humano, acolhedor, profissional, frases curtas (máx 4 frases).
 Idioma: português do Brasil.
 Nunca invente preços, prazos ou fatos que não estejam no contexto.
 Se o pedido for operacional, confirme e diga que a equipe de ${ctx.departmentLabel} vai executar.
 Se for dúvida geral, responda com o que souber do contexto.
-Intenção classificada: ${ctx.department}.`
+Intenção classificada: ${ctx.department}.
+${continuityInstruction}
+Não fique repetindo o nome do cliente em toda mensagem — use o nome só quando fizer sentido (ex: primeira mensagem do dia), não em toda resposta.`
 
   const user = `Contexto do cliente:\n${memoryBlock || '(sem memória)'}\n\nMensagem do cliente:\n${ctx.message}`
 
@@ -2109,12 +2160,12 @@ Intenção classificada: ${ctx.department}.`
     const body = await res.json()
     const content = body?.choices?.[0]?.message?.content
     if (!content) {
-      return fallbackReply(ctx.clientName, ctx.department, ctx.message)
+      return fallbackReply(ctx.clientName, ctx.department, ctx.message, ctx.greeting)
     }
     return String(content).trim()
   } catch (err) {
     console.error('generateWithGroq failed', err)
-    return fallbackReply(ctx.clientName, ctx.department, ctx.message)
+    return fallbackReply(ctx.clientName, ctx.department, ctx.message, ctx.greeting)
   }
 }
 

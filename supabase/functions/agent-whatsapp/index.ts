@@ -543,7 +543,13 @@ const HERMES_WRITE_TOOLS = new Set([
   'create_operation',
   'update_operation_status',
   'add_operation_comment',
+  'delete_client',
 ])
+
+// Ação restrita: só essa conta pode acionar delete_client, mesmo entre
+// operadores com papel OWNER. Exclusão de cliente é DELETE definitivo
+// (não arquivamento) — decisão explícita do dono da agência.
+const DELETE_CLIENT_AUTHORIZED_USER_ID = '529a59e0-f2c6-45a3-bee9-9eaf7f6d1083'
 
 const OPERATION_STATUSES = [
   'DRAFT',
@@ -628,6 +634,19 @@ const HERMES_TOOLS = [
         due_date: { type: 'string', description: 'Data de vencimento no formato YYYY-MM-DD.' },
       },
       required: ['title'],
+    },
+  },
+  {
+    name: 'delete_client',
+    description:
+      'ESCRITA — AÇÃO RESTRITA E IRREVERSÍVEL. Apaga um cliente definitivamente (dados cadastrais, contatos, memórias, operações, tarefas ligadas, conversas, financeiro — tudo). Só o dono da agência pode aprovar essa ação; se qualquer outra pessoa pedir, recuse educadamente e diga que só o dono pode autorizar isso. Use com muito cuidado.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        client_id: { type: 'string', description: 'UUID do cliente, se já souber.' },
+        client_name: { type: 'string', description: 'Nome do cliente, se não souber o UUID.' },
+      },
+      required: [],
     },
   },
   {
@@ -1168,6 +1187,53 @@ async function executeWriteTool(
       return { created: true, comment_id: data?.id }
     }
 
+    case 'delete_client': {
+      // Segunda camada de checagem — a primeira já bloqueia antes de sequer
+      // registrar a ação como pendente (runHermesAgentLoop), mas confirma de
+      // novo aqui já que essa função executa a exclusão de verdade.
+      if (actorId !== DELETE_CLIENT_AUTHORIZED_USER_ID) {
+        throw new Error('Não autorizado: só o dono da agência pode excluir clientes.')
+      }
+
+      const clientRef = await resolveClientRef(supabase, workspaceId, {
+        client_id: input.client_id as string | undefined,
+        client_name: input.client_name as string | undefined,
+      })
+      if ('error' in clientRef) throw new Error(clientRef.error)
+      const clientId = clientRef.id
+
+      const { data: clientRow, error: fetchErr } = await supabase
+        .from('clients')
+        .select('id, name')
+        .eq('id', clientId)
+        .eq('workspace_id', workspaceId)
+        .maybeSingle()
+      if (fetchErr) throw new Error(fetchErr.message)
+      if (!clientRow) throw new Error('Cliente não encontrado.')
+
+      // Ordem obrigatória: 'files' e 'operations' não cascateiam sozinhos ao
+      // apagar o cliente (FK sem ON DELETE CASCADE) — precisam ser limpos
+      // manualmente antes. O resto (contatos, memórias, conversas, contratos,
+      // financeiro etc.) cascateia automaticamente com o DELETE de clients.
+      const { data: ops } = await supabase.from('operations').select('id').eq('client_id', clientId)
+      const opIds = (ops ?? []).map((o) => o.id as string)
+
+      const orFilterParts = [`client_id.eq.${clientId}`]
+      if (opIds.length > 0) orFilterParts.push(`operation_id.in.(${opIds.join(',')})`)
+      const { error: filesErr } = await supabase.from('files').delete().or(orFilterParts.join(','))
+      if (filesErr) throw new Error(`Falha ao limpar arquivos: ${filesErr.message}`)
+
+      if (opIds.length > 0) {
+        const { error: opsErr } = await supabase.from('operations').delete().eq('client_id', clientId)
+        if (opsErr) throw new Error(`Falha ao limpar operações: ${opsErr.message}`)
+      }
+
+      const { error: clientErr } = await supabase.from('clients').delete().eq('id', clientId)
+      if (clientErr) throw new Error(clientErr.message)
+
+      return { deleted: true, client: clientRow }
+    }
+
     default:
       throw new Error(`Ferramenta de escrita desconhecida: ${toolName}`)
   }
@@ -1197,6 +1263,8 @@ function summarizeWriteResult(toolName: string, result: unknown): string {
       return 'Status da operação atualizado.'
     case 'add_operation_comment':
       return 'Comentário adicionado.'
+    case 'delete_client':
+      return `Cliente "${(r.client as { name?: string } | undefined)?.name ?? ''}" excluído definitivamente.`
     default:
       return 'Ação executada.'
   }
@@ -1303,6 +1371,24 @@ async function runHermesAgentLoop(
 
     for (const block of toolUseBlocks) {
       if (HERMES_WRITE_TOOLS.has(block.name)) {
+        if (block.name === 'delete_client' && operator.id !== DELETE_CLIENT_AUTHORIZED_USER_ID) {
+          await logAgentAction(supabase, {
+            workspaceId,
+            actorUserId: operator.id,
+            actorPhone,
+            toolName: block.name,
+            input: block.input,
+            status: 'failed',
+            error: 'Não autorizado: só o dono da agência pode excluir clientes.',
+          })
+          toolResults.push({
+            type: 'tool_result',
+            tool_use_id: block.id,
+            content:
+              'NÃO AUTORIZADO: essa pessoa não é o dono da agência. Recuse o pedido educadamente, em uma frase, explicando que só o dono pode aprovar exclusão de cliente.',
+          })
+          continue
+        }
         if (staged) {
           toolResults.push({
             type: 'tool_result',

@@ -61,6 +61,27 @@ export function useTasks() {
     fetchTasks()
   }, [fetchTasks])
 
+  // Realtime: reflete criações/atualizações feitas pelo Hermes (ou outra
+  // aba) sem precisar recarregar a página.
+  useEffect(() => {
+    if (!workspace?.id) return
+
+    const channel = supabase
+      .channel(`tasks-realtime-${workspace.id}`)
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'tasks', filter: `workspace_id=eq.${workspace.id}` },
+        () => {
+          fetchTasks()
+        },
+      )
+      .subscribe()
+
+    return () => {
+      supabase.removeChannel(channel)
+    }
+  }, [workspace?.id, fetchTasks])
+
   const createTask = async (payload: {
     title: string
     description?: string

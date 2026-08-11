@@ -36,6 +36,28 @@ export function useClients() {
     fetchClients()
   }, [fetchClients])
 
+  // Realtime: qualquer INSERT/UPDATE/DELETE em clients desse workspace (feito
+  // pela própria UI, pelo Hermes via WhatsApp, ou por outra aba) atualiza a
+  // lista sem precisar recarregar a página.
+  useEffect(() => {
+    if (!workspace?.id) return
+
+    const channel = supabase
+      .channel(`clients-realtime-${workspace.id}`)
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'clients', filter: `workspace_id=eq.${workspace.id}` },
+        () => {
+          fetchClients()
+        },
+      )
+      .subscribe()
+
+    return () => {
+      supabase.removeChannel(channel)
+    }
+  }, [workspace?.id, fetchClients])
+
   const createClient = async (payload: {
     name: string
     status?: ClientStatus

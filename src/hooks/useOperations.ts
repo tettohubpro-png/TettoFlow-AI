@@ -70,6 +70,27 @@ export function useOperations(clientId?: string) {
     fetchOperations()
   }, [fetchOperations])
 
+  // Realtime: reflete criações/atualizações feitas pelo Hermes (ou outra
+  // aba) sem precisar recarregar a página.
+  useEffect(() => {
+    if (!workspace?.id) return
+
+    const channel = supabase
+      .channel(`operations-realtime-${workspace.id}`)
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'operations', filter: `workspace_id=eq.${workspace.id}` },
+        () => {
+          fetchOperations()
+        },
+      )
+      .subscribe()
+
+    return () => {
+      supabase.removeChannel(channel)
+    }
+  }, [workspace?.id, fetchOperations])
+
   const loadOperationDetails = async (operationId: string): Promise<OperationDetails | null> => {
     const op = operations.find((o) => o.id === operationId)
     if (!op) return null

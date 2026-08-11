@@ -184,6 +184,8 @@ interface Payload {
   contact_name?: string
   client_id?: string
   instance?: string
+  isGroup?: boolean
+  groupJid?: string
 }
 
 type NormalizeResult =
@@ -222,6 +224,14 @@ Deno.serve(async (req) => {
 
     // Hermes: se o telefone é de um membro da equipe (users.whatsapp_phone),
     // desvia totalmente do fluxo de atendimento a cliente/lead abaixo.
+    // Mensagem de grupo: não passa pelo Hermes nem pelo atendimento normal
+    // (sem resposta automática dentro do grupo) — só monitora e avisa o
+    // dono por WhatsApp quando quem mandou não é da própria equipe.
+    if (payload.isGroup) {
+      await handleGroupMessage(supabase, payload, instance)
+      return json({ ok: true, group: true })
+    }
+
     const operator = await resolveOperator(supabase, payload.phone)
     if (operator) {
       const hermesResult = await handleHermesMessage(supabase, operator, payload, instance)
@@ -428,13 +438,16 @@ async function normalizePayload(raw: unknown): Promise<NormalizeResult> {
 
   const data = body.data as Record<string, unknown> | undefined
   if (data && typeof data === 'object' && data.key) {
-    const key = data.key as { remoteJid?: string; fromMe?: boolean; id?: string }
+    const key = data.key as { remoteJid?: string; fromMe?: boolean; id?: string; participant?: string }
     if (key.fromMe) return { kind: 'skip' } // eco da própria resposta do bot
 
     const remoteJid = key.remoteJid ?? ''
-    if (remoteJid.endsWith('@g.us')) return { kind: 'skip' } // grupos não são atendidos pelo agente
-
-    const phone = remoteJid.replace(/@.*/, '').replace(/\D/g, '')
+    const isGroup = remoteJid.endsWith('@g.us')
+    // Em grupo, remoteJid é o JID do grupo — quem mandou de verdade é
+    // key.participant. Grupo não passa pelo fluxo normal de atendimento
+    // (sem resposta automática ali), só monitoramento pra avisar o dono.
+    const senderJid = isGroup ? key.participant ?? '' : remoteJid
+    const phone = senderJid.replace(/@.*/, '').replace(/\D/g, '')
     if (!phone) return { kind: 'skip' }
 
     const msg = (data.message ?? {}) as Record<string, unknown>
@@ -457,6 +470,8 @@ async function normalizePayload(raw: unknown): Promise<NormalizeResult> {
         message: text.trim(),
         contact_name: data.pushName as string | undefined,
         instance: body.instance as string | undefined,
+        isGroup,
+        groupJid: isGroup ? remoteJid : undefined,
       },
     }
   }
@@ -537,6 +552,94 @@ async function resolveClient(
   }
 
   return null
+}
+
+/**
+ * Monitoramento de grupo de WhatsApp: nunca responde dentro do grupo (o
+ * cliente não deve ver a IA falando ali), só avisa o dono da agência por
+ * WhatsApp direto quando alguém que não é da equipe manda mensagem —
+ * junto com uma avaliação curta de urgência (via Groq, se configurado) pra
+ * ele decidir se responde ou resolve.
+ */
+async function handleGroupMessage(
+  supabase: ReturnType<typeof createClient>,
+  payload: Payload,
+  instance: string | undefined,
+) {
+  try {
+    // Se quem mandou é da própria equipe, não precisa avisar — a pessoa já
+    // está no grupo e sabe o que escreveu.
+    const operator = await resolveOperator(supabase, payload.phone)
+    if (operator) return
+
+    const ownerPhone = await getOwnerWhatsappPhone(supabase)
+    if (!ownerPhone) return
+
+    const client = await resolveClient(supabase, payload)
+    const senderLabel = client?.name ?? payload.contact_name ?? payload.phone
+
+    const groqKey = Deno.env.get('GROQ_API_KEY')
+    const assessment = groqKey ? await assessGroupMessageUrgency(groqKey, payload.message) : ''
+
+    const text = `📢 Mensagem em grupo — ${senderLabel}:\n"${payload.message.slice(0, 300)}"${
+      assessment ? `\n\n${assessment}` : ''
+    }`
+    await sendEvolutionText(instance, ownerPhone, text)
+
+    if (client) {
+      await supabase.from('client_ai_memory').insert({
+        workspace_id: client.workspace_id,
+        client_id: client.id,
+        category: 'HISTORY',
+        title: `Mensagem em grupo ${new Date().toISOString()}`,
+        content: `De: ${senderLabel}\nMsg: ${payload.message}`,
+        importance: 3,
+        active: true,
+      })
+    }
+  } catch (err) {
+    console.error('handleGroupMessage failed', err)
+  }
+}
+
+async function getOwnerWhatsappPhone(supabase: ReturnType<typeof createClient>): Promise<string | null> {
+  const { data } = await supabase
+    .from('users')
+    .select('whatsapp_phone')
+    .eq('id', OWNER_RESTRICTED_USER_ID)
+    .maybeSingle()
+  return (data?.whatsapp_phone as string | undefined) ?? null
+}
+
+async function assessGroupMessageUrgency(apiKey: string, message: string): Promise<string> {
+  try {
+    const res = await fetchWithTimeout(
+      'https://api.groq.com/openai/v1/chat/completions',
+      {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: 'llama-3.3-70b-versatile',
+          temperature: 0.2,
+          max_tokens: 60,
+          messages: [
+            {
+              role: 'system',
+              content:
+                'Classifique a urgência dessa mensagem de cliente em UMA frase curta e direta, em português, começando com 🔴 (urgente/reclamação), 🟡 (merece atenção) ou 🟢 (informativo/sem urgência). Sem explicações longas, só a frase.',
+            },
+            { role: 'user', content: message },
+          ],
+        }),
+      },
+      8000,
+    )
+    const body = await res.json()
+    return ((body?.choices?.[0]?.message?.content as string | undefined) ?? '').trim()
+  } catch (err) {
+    console.error('assessGroupMessageUrgency failed', err)
+    return ''
+  }
 }
 
 // ============================================================================

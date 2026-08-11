@@ -659,7 +659,6 @@ async function assessGroupMessageUrgency(apiKey: string, message: string): Promi
 // agent_actions_log.
 
 const HERMES_WRITE_TOOLS = new Set([
-  'send_message',
   'create_client',
   'update_client',
   'create_task',
@@ -671,12 +670,17 @@ const HERMES_WRITE_TOOLS = new Set([
   'delete_client',
 ])
 
+// send_message fica FORA de HERMES_WRITE_TOOLS de propósito — a pedido do
+// dono, deixou de exigir confirmação sim/não e executa na hora (continua
+// owner-only via OWNER_ONLY_TOOLS abaixo, então só ele consegue acionar).
+const HERMES_IMMEDIATE_WRITE_TOOLS = new Set(['send_message'])
+
 // Ações restritas: só essa conta (o dono da TettoHub) pode acioná-las, mesmo
-// entre operadores cadastrados. delete_client é DELETE definitivo; send_message
-// manda mensagem em nome da agência pelo número oficial pra qualquer
-// funcionário ou cliente — nenhum dos dois pode ficar na mão de quem não é
-// o dono (reportado em uso: outro operador pediu e o Hermes mandou mensagem
-// pro dono sem autorização).
+// entre operadores cadastrados. delete_client é DELETE definitivo (fica
+// staged, com confirmação); send_message manda mensagem em nome da agência
+// pelo número oficial pra qualquer funcionário ou cliente — nenhum dos dois
+// pode ficar na mão de quem não é o dono (reportado em uso: outro operador
+// pediu e o Hermes mandou mensagem pro dono sem autorização).
 const OWNER_RESTRICTED_USER_ID = '529a59e0-f2c6-45a3-bee9-9eaf7f6d1083'
 const OWNER_ONLY_TOOLS = new Set(['delete_client', 'send_message'])
 
@@ -933,7 +937,8 @@ Você tem memória das últimas mensagens dessa conversa (aparecem no histórico
 Regras:
 1. Para qualquer pedido envolvendo um cliente específico, use search_clients primeiro se você não tiver o client_id — nunca invente um ID. Antes de usar create_client, sempre rode search_clients pelo nome primeiro: se já existir algo parecido, use update_client nesse cliente em vez de criar outro (o sistema também bloqueia duplicata por telefone/nome como segurança extra, mas não confie só nisso).
 2. Ferramentas de LEITURA (search_clients, get_client_summary) você pode chamar livremente para reunir contexto.
-3. Ferramentas de ESCRITA (send_message, create_client, update_client, create_task, update_task_status, assign_task, create_operation, update_operation_status, add_operation_comment, delete_client) NUNCA são executadas na hora — ao chamar uma delas, o sistema registra a ação como pendente e te avisa. NUNCA pergunte "confirma?" em texto solto por conta própria, sem ter chamado a ferramenta — isso não registra nada e trava o fluxo. O jeito certo é: chame a ferramenta primeiro; o tool_result vai te avisar que está pendente; SÓ AÍ você escreve a pergunta de confirmação pro usuário, em uma frase, descrevendo o que vai mudar e terminando com algo como "Confirma? Responda *sim* ou *não*."
+3. Ferramentas de ESCRITA (create_client, update_client, create_task, update_task_status, assign_task, create_operation, update_operation_status, add_operation_comment, delete_client) NUNCA são executadas na hora — ao chamar uma delas, o sistema registra a ação como pendente e te avisa. NUNCA pergunte "confirma?" em texto solto por conta própria, sem ter chamado a ferramenta — isso não registra nada e trava o fluxo. O jeito certo é: chame a ferramenta primeiro; o tool_result vai te avisar que está pendente; SÓ AÍ você escreve a pergunta de confirmação pro usuário, em uma frase, descrevendo o que vai mudar e terminando com algo como "Confirma? Responda *sim* ou *não*."
+3b. send_message é diferente: executa NA HORA, sem pedir confirmação — chame a ferramenta e já informe que foi enviado (não pergunte "confirma?" antes).
 4. Chame no máximo UMA ferramenta de escrita por mensagem do usuário. Se o pedido envolve vários itens da MESMA ação (ex: apagar vários clientes de uma vez), isso ainda conta como uma chamada só — use uma ferramenta que aceite lista (como delete_client) em vez de chamar várias vezes.
 5. Respostas curtas e diretas — 1 a 3 frases, no máximo. Nada de parágrafo explicando contexto óbvio ou listando tudo que você fez passo a passo. Está no WhatsApp, não é um relatório. Só entra em mais detalhe se o usuário pedir explicitamente.
 6. Se não entender o pedido ou faltar informação (ex: qual cliente, qual tarefa), pergunte antes de agir — em uma frase curta.
@@ -1305,6 +1310,25 @@ async function executeWriteTool(
         targetPhone = match.whatsapp_phone
         targetLabel = match.name
       } else if (input.to_client_name) {
+        // Segurança: se o nome bate com alguém da equipe, é quase certo que
+        // é engano do modelo usando to_client_name em vez de
+        // to_team_member_name (aconteceu em uso real: um lead arquivado
+        // tinha o mesmo nome de uma operadora registrada, e a mensagem foi
+        // pro cadastro de cliente errado em vez de pra pessoa de verdade).
+        const { data: staffMemberships } = await supabase
+          .from('memberships')
+          .select('users(name)')
+          .eq('workspace_id', workspaceId)
+        const staffNeedle = String(input.to_client_name).toLowerCase()
+        const staffMatch = (staffMemberships ?? [])
+          .map((m) => m.users as unknown as { name: string } | null)
+          .find((u) => u?.name && (u.name.toLowerCase().includes(staffNeedle) || staffNeedle.includes(u.name.toLowerCase())))
+        if (staffMatch) {
+          throw new Error(
+            `"${input.to_client_name}" é da equipe (${staffMatch.name}), não um cliente — use to_team_member_name em vez de to_client_name.`,
+          )
+        }
+
         const clientRef = await resolveClientRef(supabase, workspaceId, {
           client_name: input.to_client_name as string,
         })
@@ -1757,8 +1781,46 @@ async function runHermesAgentLoop(
     const toolResults: Array<Record<string, unknown>> = []
 
     for (const block of toolUseBlocks) {
-      if (HERMES_WRITE_TOOLS.has(block.name)) {
-        if (OWNER_ONLY_TOOLS.has(block.name) && operator.id !== OWNER_RESTRICTED_USER_ID) {
+      if (OWNER_ONLY_TOOLS.has(block.name) && operator.id !== OWNER_RESTRICTED_USER_ID) {
+        await logAgentAction(supabase, {
+          workspaceId,
+          actorUserId: operator.id,
+          actorPhone,
+          toolName: block.name,
+          input: block.input,
+          status: 'failed',
+          error: 'Não autorizado: só o dono da agência pode acionar essa ferramenta.',
+        })
+        toolResults.push({
+          type: 'tool_result',
+          tool_use_id: block.id,
+          content:
+            'NÃO AUTORIZADO: essa pessoa não é o dono da agência. Recuse o pedido educadamente, em uma frase, explicando que só o dono pode autorizar isso.',
+        })
+        continue
+      }
+
+      if (HERMES_IMMEDIATE_WRITE_TOOLS.has(block.name)) {
+        // send_message: a pedido do dono, executa direto sem pedir
+        // confirmação — já é owner-only (checado acima), então só ele
+        // consegue disparar isso de qualquer forma.
+        try {
+          const result = await executeWriteTool(supabase, workspaceId, operator.id, block.name, block.input)
+          await logAgentAction(supabase, {
+            workspaceId,
+            actorUserId: operator.id,
+            actorPhone,
+            toolName: block.name,
+            input: block.input,
+            status: 'executed',
+            result,
+          })
+          toolResults.push({
+            type: 'tool_result',
+            tool_use_id: block.id,
+            content: JSON.stringify(result),
+          })
+        } catch (err) {
           await logAgentAction(supabase, {
             workspaceId,
             actorUserId: operator.id,
@@ -1766,16 +1828,16 @@ async function runHermesAgentLoop(
             toolName: block.name,
             input: block.input,
             status: 'failed',
-            error: 'Não autorizado: só o dono da agência pode acionar essa ferramenta.',
+            error: String(err),
           })
           toolResults.push({
             type: 'tool_result',
             tool_use_id: block.id,
-            content:
-              'NÃO AUTORIZADO: essa pessoa não é o dono da agência. Recuse o pedido educadamente, em uma frase, explicando que só o dono pode autorizar isso.',
+            content: String(err),
+            is_error: true,
           })
-          continue
         }
+      } else if (HERMES_WRITE_TOOLS.has(block.name)) {
         if (staged) {
           toolResults.push({
             type: 'tool_result',
@@ -2436,13 +2498,21 @@ async function upsertInternalConversation(
   turns: Array<{ direction: 'inbound' | 'outbound'; content: string; isAi: boolean }>,
 ) {
   try {
+    // Compara por QUALQUER variação do telefone (com/sem 9º dígito, com/sem
+    // DDI), não só igualdade exata — o mesmo operador aparece com formatos
+    // diferentes conforme a origem (users.whatsapp_phone cadastrado, vs o
+    // que vem cru no payload do WhatsApp), e isso já causou duas conversas
+    // internas duplicadas pra mesma pessoa em uso real.
+    const variants = phoneVariants(phone)
     const { data: existing } = await supabase
       .from('conversations')
       .select('id')
       .eq('workspace_id', workspaceId)
       .eq('channel', 'whatsapp')
-      .eq('contact_phone', phone)
+      .in('contact_phone', variants.length > 0 ? variants : [phone])
       .is('client_id', null)
+      .order('created_at', { ascending: true })
+      .limit(1)
       .maybeSingle()
 
     let conversationId = existing?.id as string | undefined

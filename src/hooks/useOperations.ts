@@ -84,9 +84,20 @@ export function useOperations(clientId?: string) {
           fetchOperations()
         },
       )
-      .subscribe()
+      .subscribe((status, err) => {
+        if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+          console.warn('[realtime:operations] falhou, refazendo fetch como fallback:', status, err)
+          fetchOperations()
+        }
+      })
+
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') fetchOperations()
+    }
+    document.addEventListener('visibilitychange', onVisible)
 
     return () => {
+      document.removeEventListener('visibilitychange', onVisible)
       supabase.removeChannel(channel)
     }
   }, [workspace?.id, fetchOperations])

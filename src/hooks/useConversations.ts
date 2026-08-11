@@ -77,9 +77,23 @@ export function useConversations() {
         { event: 'INSERT', schema: 'public', table: 'conversation_messages', filter: `workspace_id=eq.${workspace.id}` },
         () => fetchConversations(),
       )
-      .subscribe()
+      .subscribe((status, err) => {
+        if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+          console.warn('[realtime:conversations] falhou, refazendo fetch como fallback:', status, err)
+          fetchConversations()
+        }
+      })
+
+    // Rede-de-segurança: se a conexão WS cair silenciosamente (aba em segundo
+    // plano por muito tempo, sono do laptop, etc.), buscar de novo assim que
+    // a aba volta a ficar visível — sem precisar de F5.
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') fetchConversations()
+    }
+    document.addEventListener('visibilitychange', onVisible)
 
     return () => {
+      document.removeEventListener('visibilitychange', onVisible)
       supabase.removeChannel(channel)
     }
   }, [workspace?.id, fetchConversations])
@@ -128,9 +142,20 @@ export function useConversationMessages(conversationId: string | undefined) {
         { event: 'INSERT', schema: 'public', table: 'conversation_messages', filter: `conversation_id=eq.${conversationId}` },
         () => fetchMessages(),
       )
-      .subscribe()
+      .subscribe((status, err) => {
+        if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+          console.warn('[realtime:messages] falhou, refazendo fetch como fallback:', status, err)
+          fetchMessages()
+        }
+      })
+
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') fetchMessages()
+    }
+    document.addEventListener('visibilitychange', onVisible)
 
     return () => {
+      document.removeEventListener('visibilitychange', onVisible)
       supabase.removeChannel(channel)
     }
   }, [conversationId, fetchMessages])

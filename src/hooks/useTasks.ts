@@ -75,9 +75,20 @@ export function useTasks() {
           fetchTasks()
         },
       )
-      .subscribe()
+      .subscribe((status, err) => {
+        if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+          console.warn('[realtime:tasks] falhou, refazendo fetch como fallback:', status, err)
+          fetchTasks()
+        }
+      })
+
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') fetchTasks()
+    }
+    document.addEventListener('visibilitychange', onVisible)
 
     return () => {
+      document.removeEventListener('visibilitychange', onVisible)
       supabase.removeChannel(channel)
     }
   }, [workspace?.id, fetchTasks])

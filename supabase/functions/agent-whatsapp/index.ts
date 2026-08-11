@@ -449,6 +449,36 @@ async function normalizePayload(raw: unknown): Promise<NormalizeResult> {
   return { kind: 'invalid' }
 }
 
+/**
+ * Gera todas as variações plausíveis de um número de telefone BR pra
+ * comparação: com/sem DDI (55) e com/sem o 9º dígito do celular. O WhatsApp
+ * às vezes manda o remoteJid SEM o 9 extra (formato antigo), mesmo quando o
+ * número "oficial" da pessoa tem os 9 dígitos — sem isso o match falha
+ * silenciosamente (confirmado em teste: operador cadastrado com o 9 não
+ * bateu com a mensagem real, que chegou sem o 9).
+ */
+function phoneVariants(phone: string): string[] {
+  const digits = phone.replace(/\D/g, '')
+  if (!digits) return []
+
+  const withoutDDI = digits.startsWith('55') ? digits.slice(2) : digits
+  const withDDI = `55${withoutDDI}`
+  const variants = new Set([digits, withoutDDI, withDDI])
+
+  // withoutDDI aqui é DDD (2 dígitos) + assinante (8 ou 9 dígitos)
+  if (withoutDDI.length === 11 && withoutDDI[2] === '9') {
+    const without9 = withoutDDI.slice(0, 2) + withoutDDI.slice(3)
+    variants.add(without9)
+    variants.add(`55${without9}`)
+  } else if (withoutDDI.length === 10) {
+    const with9 = withoutDDI.slice(0, 2) + '9' + withoutDDI.slice(2)
+    variants.add(with9)
+    variants.add(`55${with9}`)
+  }
+
+  return Array.from(variants)
+}
+
 async function resolveClient(
   supabase: ReturnType<typeof createClient>,
   payload: Payload,
@@ -462,11 +492,9 @@ async function resolveClient(
     if (data) return data
   }
 
-  const phoneDigits = payload.phone.replace(/\D/g, '')
-  if (!phoneDigits) return null
+  const variants = phoneVariants(payload.phone)
+  if (variants.length === 0) return null
 
-  const withoutDDI = phoneDigits.replace(/^55/, '')
-  const variants = Array.from(new Set([phoneDigits, withoutDDI, `55${withoutDDI}`]))
   const orFilter = variants
     .flatMap((v) => [`phone.eq.${v}`, `phone.ilike.%${v}`])
     .join(',')
@@ -721,11 +749,9 @@ async function resolveOperator(
   supabase: ReturnType<typeof createClient>,
   phone: string,
 ): Promise<{ id: string; name: string; email: string } | null> {
-  const phoneDigits = phone.replace(/\D/g, '')
-  if (!phoneDigits) return null
+  const variants = phoneVariants(phone)
+  if (variants.length === 0) return null
 
-  const withoutDDI = phoneDigits.replace(/^55/, '')
-  const variants = Array.from(new Set([phoneDigits, withoutDDI, `55${withoutDDI}`]))
   const orFilter = variants.map((v) => `whatsapp_phone.eq.${v}`).join(',')
 
   const { data } = await supabase

@@ -274,9 +274,28 @@ Deno.serve(async (req) => {
       if (withinHours) {
         await saveIntakeProgress(supabase, client, intakeMemory.id, result, instance)
       }
-      await logConversation(supabase, client, payload, result.reply, false)
-      await sendEvolutionText(instance, payload.phone, result.reply)
-      await sendEvolutionPresence(instance, payload.phone, 'paused')
+
+      // Mesmo delay de 90s do fluxo normal — lead novo também merece a
+      // chance da secretária/comercial responder pessoalmente antes da IA.
+      if (withinHours) {
+        const conversationId = await logConversation(supabase, client, payload, null, false)
+        if (conversationId) {
+          await scheduleDeferredReply(supabase, {
+            workspaceId: client.workspace_id,
+            conversationId,
+            clientId: client.id,
+            phone: payload.phone,
+            instance,
+            replyText: result.reply,
+          })
+        }
+        await sendEvolutionPresence(instance, payload.phone, 'paused')
+      } else {
+        await logConversation(supabase, client, payload, result.reply, false)
+        await sendEvolutionText(instance, payload.phone, result.reply)
+        await sendEvolutionPresence(instance, payload.phone, 'paused')
+      }
+
       return json({
         reply: result.reply,
         department: 'commercial',
@@ -285,6 +304,7 @@ Deno.serve(async (req) => {
         client_id: client.id,
         client_name: client.name,
         lead_intake: !result.done,
+        deferred: withinHours,
       })
     }
 

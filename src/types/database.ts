@@ -21,6 +21,7 @@ export interface AppUser {
   name: string
   email: string
   avatar_url: string | null
+  whatsapp_phone?: string | null
   must_change_password?: boolean
   created_at: string
   updated_at: string

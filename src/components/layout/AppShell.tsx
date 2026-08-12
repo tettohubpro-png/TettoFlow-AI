@@ -3,10 +3,8 @@ import { NavLink, Outlet, useLocation, Link } from 'react-router-dom'
 import {
   Home,
   Users,
-  CalendarDays,
   CheckSquare,
   Wallet,
-  Target,
   Calendar,
   UsersRound,
   Building2,
@@ -44,10 +42,8 @@ interface NavItem {
 const primaryNav: NavItem[] = [
   { to: '/', label: 'Início', icon: Home, end: true },
   { to: '/crm', label: 'Clientes', icon: Users },
-  { to: '/conteudo', label: 'Conteúdo', icon: CalendarDays },
   { to: '/tarefas', label: 'Tarefas', icon: CheckSquare },
   { to: '/financeiro', label: 'Financeiro', icon: Wallet },
-  { to: '/comercial', label: 'CRM', icon: Target },
   { to: '/agenda', label: 'Agenda', icon: Calendar },
   { to: '/equipe', label: 'Equipe', icon: UsersRound },
 ]
@@ -73,8 +69,8 @@ const accountNav: NavItem[] = [
 const bottomNav: { to: string; label: string; end?: boolean; more?: boolean }[] = [
   { to: '/', label: 'Início', end: true },
   { to: '/crm', label: 'Clientes' },
-  { to: '/conteudo', label: 'Conteúdo' },
   { to: '/tarefas', label: 'Tarefas' },
+  { to: '/equipe', label: 'Equipe' },
   { to: '#mais', label: 'Mais', more: true },
 ]
 

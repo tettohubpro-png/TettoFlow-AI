@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react'
 import type { DragEvent } from 'react'
-import { useSearchParams, Link } from 'react-router-dom'
-import { LayoutGrid, Table2 } from 'lucide-react'
+import { useSearchParams } from 'react-router-dom'
+import { LayoutGrid, Table2, CalendarDays, Download, Pencil } from 'lucide-react'
 import { OperationCard } from '@/components/operations/OperationCard'
 import { OperationModal } from '@/components/operations/OperationModal'
+import { PostCalendar } from '@/components/dashboard/PostCalendar'
 import { useOperations, type OperationDetails } from '@/hooks/useOperations'
 import { useClients } from '@/hooks/useClients'
 import { useApprovals } from '@/hooks/useApprovals'
@@ -18,10 +19,11 @@ import {
   nextOperationStatus,
   previousOperationStatus,
 } from '@/utils/permissions'
+import { downloadClientFile, openClientFile } from '@/utils/fileView'
 import type { OperationFormData } from '@/utils/operationExtras'
-import type { Operation, OperationStatus } from '@/types/database'
+import type { ClientFile, Operation, OperationStatus } from '@/types/database'
 
-type ViewMode = 'kanban' | 'tabela'
+type ViewMode = 'kanban' | 'tabela' | 'calendario'
 
 const STATUS_DOT: Record<OperationStatus, string> = {
   DRAFT: 'bg-slate-500',
@@ -65,6 +67,9 @@ export function ProjectsPage() {
   const [viewMode, setViewMode] = useState<ViewMode>('kanban')
   const [clientFilter, setClientFilter] = useState('')
   const [searchParams, setSearchParams] = useSearchParams()
+  const [selectedCalendarOp, setSelectedCalendarOp] = useState<OperationDetails | null>(null)
+  const [calendarError, setCalendarError] = useState<string | null>(null)
+  const [busyFileId, setBusyFileId] = useState<string | null>(null)
 
   const filteredOperations = clientFilter
     ? operations.filter((op) => op.client_id === clientFilter)
@@ -90,6 +95,9 @@ export function ProjectsPage() {
       const attach = await attachFiles(editingDetails.id, editingDetails.client_id, files)
       if (attach.error) return attach
     }
+    if (selectedCalendarOp?.id === editingDetails.id) {
+      setSelectedCalendarOp(await loadOperationDetails(editingDetails.id))
+    }
     return { error: null }
   }
 
@@ -101,6 +109,28 @@ export function ProjectsPage() {
       setEditingDetails(details)
       setEditOpen(true)
     }
+  }
+
+  const openCalendarDetails = async (op: Operation) => {
+    setCalendarError(null)
+    const details = await loadOperationDetails(op.id)
+    setSelectedCalendarOp(details)
+  }
+
+  const handleOpenFile = async (file: ClientFile) => {
+    setBusyFileId(file.id)
+    setCalendarError(null)
+    const result = await openClientFile(file)
+    if (result.error) setCalendarError(result.error)
+    setBusyFileId(null)
+  }
+
+  const handleDownloadFile = async (file: ClientFile) => {
+    setBusyFileId(file.id)
+    setCalendarError(null)
+    const result = await downloadClientFile(file)
+    if (result.error) setCalendarError(result.error)
+    setBusyFileId(null)
   }
 
   useEffect(() => {
@@ -168,10 +198,7 @@ export function ProjectsPage() {
         <div>
           <h2 className="text-xl font-bold sm:text-2xl">Tarefas</h2>
           <p className="text-sm text-slate-400">
-            Kanban e tabela do pipeline — calendário editorial fica em{' '}
-            <Link to="/conteudo" className="text-emerald-400 hover:underline">
-              Conteúdo
-            </Link>
+            Kanban, tabela e calendário editorial do pipeline
           </p>
         </div>
         {canOperate && (
@@ -191,6 +218,7 @@ export function ProjectsPage() {
             [
               { key: 'kanban', label: 'Kanban', icon: LayoutGrid },
               { key: 'tabela', label: 'Tabela', icon: Table2 },
+              { key: 'calendario', label: 'Calendário', icon: CalendarDays },
             ] as const
           ).map(({ key, label, icon: Icon }) => (
             <button
@@ -228,6 +256,18 @@ export function ProjectsPage() {
           operations={filteredOperations}
           members={members}
           onEdit={openEdit}
+        />
+      ) : viewMode === 'calendario' ? (
+        <CalendarView
+          operations={filteredOperations}
+          selected={selectedCalendarOp}
+          canOperate={canOperate}
+          busyFileId={busyFileId}
+          error={calendarError}
+          onSelect={openCalendarDetails}
+          onEdit={openEdit}
+          onOpenFile={handleOpenFile}
+          onDownloadFile={handleDownloadFile}
         />
       ) : (
         <div
@@ -373,6 +413,113 @@ function TableView({
           })}
         </tbody>
       </table>
+    </div>
+  )
+}
+
+function CalendarView({
+  operations,
+  selected,
+  canOperate,
+  busyFileId,
+  error,
+  onSelect,
+  onEdit,
+  onOpenFile,
+  onDownloadFile,
+}: {
+  operations: Operation[]
+  selected: OperationDetails | null
+  canOperate: boolean
+  busyFileId: string | null
+  error: string | null
+  onSelect: (op: Operation) => void
+  onEdit: (operationId: string) => void
+  onOpenFile: (file: ClientFile) => void
+  onDownloadFile: (file: ClientFile) => void
+}) {
+  return (
+    <div className="grid gap-4 lg:grid-cols-[1fr_20rem]">
+      <PostCalendar operations={operations} onSelect={onSelect} selectedId={selected?.id} />
+
+      <aside className="tf-panel h-fit p-4">
+        <h3 className="text-sm font-semibold">Postagem selecionada</h3>
+        {!selected ? (
+          <p className="mt-2 text-xs" style={{ color: 'var(--color-text3)' }}>
+            Selecione um item no calendário para editar a data, baixar o post ou abrir a operação
+            no kanban.
+          </p>
+        ) : (
+          <div className="mt-3 space-y-3">
+            <div>
+              <p className="font-medium">{selected.title}</p>
+              <p className="text-xs" style={{ color: 'var(--color-text3)' }}>
+                {selected.clients?.name ?? 'Sem cliente'}
+                {selected.deadline
+                  ? ` · ${new Date(selected.deadline).toLocaleDateString('pt-BR')}`
+                  : ''}
+              </p>
+            </div>
+
+            {canOperate && (
+              <button
+                type="button"
+                onClick={() => onEdit(selected.id)}
+                className="tf-btn tf-btn-primary inline-flex w-full items-center justify-center gap-1.5 text-sm"
+              >
+                <Pencil size={14} /> Editar postagem / data
+              </button>
+            )}
+
+            <div>
+              <p className="tf-label">Arquivos / posts</p>
+              {selected.files.length === 0 ? (
+                <p className="text-xs" style={{ color: 'var(--color-text3)' }}>
+                  Nenhum anexo. Edite a operação para enviar o arquivo do post.
+                </p>
+              ) : (
+                <ul className="mt-1 space-y-1.5">
+                  {selected.files.map((file) => (
+                    <li
+                      key={file.id}
+                      className="flex items-center justify-between gap-2 rounded-lg border px-2 py-1.5 text-xs"
+                      style={{ borderColor: 'var(--color-border)' }}
+                    >
+                      <span className="truncate">{file.name}</span>
+                      <span className="flex shrink-0 gap-1">
+                        <button
+                          type="button"
+                          disabled={busyFileId === file.id}
+                          onClick={() => onOpenFile(file)}
+                          className="rounded px-1.5 py-0.5 hover:bg-white/5"
+                          title="Abrir"
+                        >
+                          Abrir
+                        </button>
+                        <button
+                          type="button"
+                          disabled={busyFileId === file.id}
+                          onClick={() => onDownloadFile(file)}
+                          className="inline-flex items-center gap-0.5 rounded px-1.5 py-0.5 hover:bg-white/5"
+                          title="Baixar"
+                        >
+                          <Download size={12} />
+                        </button>
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+
+            {error && (
+              <p className="text-xs" style={{ color: 'var(--color-danger)' }}>
+                {error}
+              </p>
+            )}
+          </div>
+        )}
+      </aside>
     </div>
   )
 }

@@ -5,9 +5,10 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.49.1'
  * pending_bot_replies: respostas da IA que ficaram "engatilhadas" por 90s
  * esperando o social media responder o cliente primeiro. Pra cada uma que já
  * passou do send_after:
- *   - se alguém da equipe já mandou mensagem outbound (humana) nessa
- *     conversa depois que a resposta foi engatilhada -> cancela (skipped),
- *     não manda nada (evita duplicidade)
+ *   - se a equipe está/esteve ativa nessa conversa recentemente (mensagem
+ *     humana até HUMAN_ACTIVE_WINDOW_MS antes ou depois da mensagem que
+ *     gerou essa resposta) -> cancela (skipped), a IA não se mete numa
+ *     conversa que já tem gente cuidando
  *   - senão -> manda pelo WhatsApp e loga como outbound da IA
  */
 
@@ -15,6 +16,11 @@ const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 }
+
+// Janela de "equipe ativa" — se alguém mandou mensagem pro cliente dentro
+// desse intervalo (antes ou depois da mensagem do cliente que gerou essa
+// resposta), a IA entende que já tem gente cuidando e não interfere.
+const HUMAN_ACTIVE_WINDOW_MS = 15 * 60 * 1000
 
 interface PendingReply {
   id: string
@@ -55,15 +61,21 @@ Deno.serve(async (req) => {
 
     for (const row of rows) {
       try {
-        // Alguém da equipe (humano, não IA) já respondeu essa conversa
-        // depois que a resposta da IA foi engatilhada? Se sim, cancela.
+        // Alguém da equipe está ativo nessa conversa? Não olha só se
+        // respondeu DEPOIS da mensagem engatilhada — se a equipe já vinha
+        // atendendo esse cliente pessoalmente pouco antes (até 15min antes
+        // do created_at dessa resposta), a IA fica de fora também, mesmo
+        // que essa mensagem específica ainda não tenha resposta humana.
+        const activeWindowStart = new Date(
+          new Date(row.created_at).getTime() - HUMAN_ACTIVE_WINDOW_MS,
+        ).toISOString()
         const { data: humanReply } = await supabase
           .from('conversation_messages')
           .select('id')
           .eq('conversation_id', row.conversation_id)
           .eq('direction', 'outbound')
           .eq('is_ai', false)
-          .gt('created_at', row.created_at)
+          .gt('created_at', activeWindowStart)
           .limit(1)
           .maybeSingle()
 

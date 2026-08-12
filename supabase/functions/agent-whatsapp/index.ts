@@ -331,8 +331,9 @@ Deno.serve(async (req) => {
       })
     }
 
+    const withinHours = isBusinessHours(new Date())
     let reply: string
-    if (!isBusinessHours(new Date())) {
+    if (!withinHours) {
       reply = OFF_HOURS_MESSAGE
     } else if (groqKey) {
       reply = await generateWithGroq(groqKey, {
@@ -376,10 +377,30 @@ Deno.serve(async (req) => {
       route.needsHuman,
       null,
     )
-    await logConversation(supabase, client, payload, reply, route.needsHuman)
 
-    await sendEvolutionText(instance, payload.phone, reply)
-    await sendEvolutionPresence(instance, payload.phone, 'paused')
+    // Dentro do horário comercial, a resposta da IA fica engatilhada 90s —
+    // dá tempo do social media responder o cliente pessoalmente antes.
+    // Fora do horário não faz sentido esperar (ninguém vai responder mesmo
+    // — reply já é a mensagem informativa de horário), manda na hora.
+    if (withinHours) {
+      const conversationId = await logConversation(supabase, client, payload, null, route.needsHuman)
+      if (conversationId) {
+        await scheduleDeferredReply(supabase, {
+          workspaceId: client.workspace_id,
+          conversationId,
+          clientId: client.id,
+          phone: payload.phone,
+          instance,
+          replyText: reply,
+        })
+      }
+      await sendEvolutionPresence(instance, payload.phone, 'paused')
+    } else {
+      await logConversation(supabase, client, payload, reply, route.needsHuman)
+      await sendEvolutionText(instance, payload.phone, reply)
+      await sendEvolutionPresence(instance, payload.phone, 'paused')
+    }
+
     if (shouldCreateOp) {
       await sendInternalAlert(instance, client.name, route.department, payload.message)
     }
@@ -395,6 +416,7 @@ Deno.serve(async (req) => {
       operation_id: operationId,
       client_id: client.id,
       client_name: client.name,
+      deferred: withinHours,
     })
   } catch (err) {
     return json({ error: String(err) }, 500)
@@ -2509,9 +2531,9 @@ async function logConversation(
   supabase: ReturnType<typeof createClient>,
   client: { id: string; workspace_id: string },
   payload: Payload,
-  reply: string,
+  reply: string | null,
   handoffRequired: boolean,
-) {
+): Promise<string | undefined> {
   try {
     const { data: existing } = await supabase
       .from('conversations')
@@ -2552,9 +2574,9 @@ async function logConversation(
       conversationId = created?.id
     }
 
-    if (!conversationId) return
+    if (!conversationId) return undefined
 
-    await supabase.from('conversation_messages').insert([
+    const rows: Array<Record<string, unknown>> = [
       {
         workspace_id: client.workspace_id,
         conversation_id: conversationId,
@@ -2563,18 +2585,67 @@ async function logConversation(
         content: payload.message,
         is_ai: false,
       },
-      {
+    ]
+    // reply null = resposta ficou engatilhada (pending_bot_replies), o
+    // outbound é logado depois pelo flush-pending-replies quando sair de
+    // verdade — não loga aqui pra não duplicar/logar cedo demais.
+    if (reply !== null) {
+      rows.push({
         workspace_id: client.workspace_id,
         conversation_id: conversationId,
         client_id: client.id,
         direction: 'outbound',
         content: reply,
         is_ai: true,
-      },
-    ])
+      })
+    }
+    await supabase.from('conversation_messages').insert(rows)
+    return conversationId
   } catch (err) {
     // Falha ao logar a thread não pode derrubar a resposta ao cliente.
     console.error('logConversation failed', err)
+    return undefined
+  }
+}
+
+const BOT_REPLY_DELAY_MS = 90_000
+
+/**
+ * Engatilha a resposta da IA pra sair só depois de 90s — dá tempo do social
+ * media responder o cliente pessoalmente primeiro (flush-pending-replies,
+ * chamado a cada 30s pelo pg_cron, checa se alguém já respondeu antes de
+ * mandar). Se já existia uma resposta pendente pra essa conversa (cliente
+ * mandou mensagens seguidas), cancela a antiga em vez de empilhar as duas.
+ */
+async function scheduleDeferredReply(
+  supabase: ReturnType<typeof createClient>,
+  params: {
+    workspaceId: string
+    conversationId: string
+    clientId: string | null
+    phone: string
+    instance: string | undefined
+    replyText: string
+  },
+) {
+  try {
+    await supabase
+      .from('pending_bot_replies')
+      .update({ status: 'superseded', resolved_at: new Date().toISOString() })
+      .eq('conversation_id', params.conversationId)
+      .eq('status', 'pending')
+
+    await supabase.from('pending_bot_replies').insert({
+      workspace_id: params.workspaceId,
+      conversation_id: params.conversationId,
+      client_id: params.clientId,
+      phone: params.phone,
+      instance: params.instance ?? null,
+      reply_text: params.replyText,
+      send_after: new Date(Date.now() + BOT_REPLY_DELAY_MS).toISOString(),
+    })
+  } catch (err) {
+    console.error('scheduleDeferredReply failed', err)
   }
 }
 

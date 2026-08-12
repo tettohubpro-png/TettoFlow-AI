@@ -163,8 +163,8 @@ export type NavItem = {
 
 const ALL_NAV: NavItem[] = [
   { to: '/', label: 'Dashboard', short: 'Home', end: true },
+  { to: '/mensagens', label: 'WhatsApp', short: 'Zap' },
   { to: '/tarefas', label: 'Tarefas', short: 'Tasks' },
-  { to: '/conteudo', label: 'Conteúdo', short: 'Cont' },
   { to: '/crm', label: 'CRM', short: 'CRM' },
   { to: '/financeiro', label: 'Financeiro', short: 'Fin' },
   { to: '/equipe', label: 'Equipe', short: 'Team' },
@@ -173,8 +173,6 @@ const ALL_NAV: NavItem[] = [
   { to: '/alertas', label: 'Alertas', short: 'Alert' },
   { to: '/relatorios', label: 'Relatórios', short: 'Rel' },
   { to: '/ia', label: 'IA', short: 'IA' },
-  { to: '/whatsapp', label: 'WhatsApp IA', short: 'Zap' },
-  { to: '/mensagens', label: 'Mensagens', short: 'Msgs' },
   { to: '/configuracoes', label: 'Configurações', short: 'Config' },
 ]
 
@@ -183,7 +181,8 @@ const EMPLOYEE_PATHS = new Set([
   '/',
   '/projetos',
   '/tarefas',
-  '/conteudo',
+  '/mensagens',
+  '/whatsapp',
   '/configuracoes',
 ])
 

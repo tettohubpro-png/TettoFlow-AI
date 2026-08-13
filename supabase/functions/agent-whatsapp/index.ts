@@ -2628,7 +2628,7 @@ async function logConversation(
   }
 }
 
-const BOT_REPLY_DELAY_MS = 90_000
+const BOT_REPLY_DELAY_MS = 45_000
 
 /**
  * Engatilha a resposta da IA pra sair só depois de 90s — dá tempo do social

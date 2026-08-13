@@ -26,6 +26,17 @@ const DEPARTMENT_LABELS: Record<Department, string> = {
 
 const DEFAULT_TEMPLATE_ID = '2e8a4766-ac69-438f-b916-ecfc79637d02'
 
+// Grupos internos da TettoHub (equipe conversando entre si sobre produção —
+// não são grupos de cliente). O agente NÃO deve avisar o dono sobre o que
+// rola neles por padrão — só quando ele é @-marcado diretamente, ou quando a
+// mensagem é urgente e só ele consegue resolver (ver handleGroupMessage).
+const INTERNAL_GROUP_JIDS = new Set([
+  '120363418951902198@g.us', // Designer Lilian- TettoHub
+  '120363419492601496@g.us', // Edição de Vídeo - André
+  '120363423751527399@g.us', // Tetto Hub - Estagiários
+  '120363425335706554@g.us', // Edição de Vídeo - Marcos
+])
+
 // Roteiro de vendas pro agente conversar com LEADS (números ainda não cadastrados
 // como cliente). PLACEHOLDER — Mairo vai trocar por conteúdo real (diferenciais,
 // cases, prioridade de serviço). Até lá, mantém regras seguras: nunca cita preço
@@ -186,6 +197,7 @@ interface Payload {
   instance?: string
   isGroup?: boolean
   groupJid?: string
+  mentionedPhones?: string[]
 }
 
 type NormalizeResult =
@@ -542,6 +554,7 @@ async function normalizePayload(raw: unknown): Promise<NormalizeResult> {
         instance: body.instance as string | undefined,
         isGroup,
         groupJid: isGroup ? remoteJid : undefined,
+        mentionedPhones: isGroup ? extractMentionedPhones(msg) : undefined,
       },
     }
   }
@@ -552,6 +565,25 @@ async function normalizePayload(raw: unknown): Promise<NormalizeResult> {
   }
 
   return { kind: 'invalid' }
+}
+
+/**
+ * Extrai os telefones @-marcados numa mensagem de grupo (WhatsApp só manda
+ * isso em extendedTextMessage/imageMessage/videoMessage.contextInfo.mentionedJid,
+ * nunca em "conversation" simples). Retorna só dígitos, sem @s.whatsapp.net.
+ */
+function extractMentionedPhones(msg: Record<string, unknown>): string[] {
+  const sources = [msg.extendedTextMessage, msg.imageMessage, msg.videoMessage] as Array<
+    Record<string, unknown> | undefined
+  >
+  for (const src of sources) {
+    const contextInfo = src?.contextInfo as Record<string, unknown> | undefined
+    const mentioned = contextInfo?.mentionedJid as string[] | undefined
+    if (Array.isArray(mentioned) && mentioned.length > 0) {
+      return mentioned.map((jid) => jid.replace(/@.*/, '').replace(/\D/g, '')).filter(Boolean)
+    }
+  }
+  return []
 }
 
 /** Minúsculo, sem acento, sem espaço duplicado — pra comparar nomes de forma tolerante. */
@@ -744,6 +776,11 @@ async function handlePossibleHumanReply(
  * WhatsApp direto quando alguém que não é da equipe manda mensagem —
  * junto com uma avaliação curta de urgência (via Groq, se configurado) pra
  * ele decidir se responde ou resolve.
+ *
+ * Exceção: grupos INTERNOS da TettoHub (equipe conversando sobre produção
+ * entre si, ver INTERNAL_GROUP_JIDS) não geram aviso por padrão — só quando
+ * o dono é @-marcado diretamente, ou quando a mensagem é urgente E só ele
+ * consegue resolver (ver assessInternalGroupUrgency).
  */
 async function handleGroupMessage(
   supabase: ReturnType<typeof createClient>,
@@ -762,10 +799,32 @@ async function handleGroupMessage(
     const client = await resolveClient(supabase, payload)
     const senderLabel = client?.name ?? payload.contact_name ?? payload.phone
 
-    const groqKey = Deno.env.get('GROQ_API_KEY')
-    const assessment = groqKey ? await assessGroupMessageUrgency(groqKey, payload.message) : ''
+    const isInternalGroup = !!payload.groupJid && INTERNAL_GROUP_JIDS.has(payload.groupJid)
+    const ownerMentioned = isOwnerMentioned(ownerPhone, payload.mentionedPhones)
+    console.log(
+      `[handleGroupMessage] group=${payload.groupJid} internal=${isInternalGroup} ownerMentioned=${ownerMentioned}`,
+    )
 
-    const text = `📢 Mensagem em grupo — ${senderLabel}:\n"${payload.message.slice(0, 300)}"${
+    const groqKey = Deno.env.get('GROQ_API_KEY')
+
+    if (isInternalGroup && !ownerMentioned) {
+      // Grupo interno, dono não foi marcado: só avisa se for algo urgente
+      // que só ele consegue resolver — chatter normal de produção fica de
+      // fora, o dono não precisa saber de cada atualização de edição/design.
+      if (!groqKey) return
+      const verdict = await assessInternalGroupUrgency(groqKey, payload.message)
+      console.log(`[handleGroupMessage] internal urgency verdict: notify=${verdict.shouldNotify} reason=${verdict.reason}`)
+      if (!verdict.shouldNotify) return
+
+      const text = `🔴 Grupo interno "${senderLabel !== payload.phone ? senderLabel : 'equipe'}" — precisa de você:\n"${payload.message.slice(0, 300)}"\n\n${verdict.reason}`
+      await sendEvolutionText(instance, ownerPhone, text)
+      return
+    }
+
+    const assessment = groqKey ? await assessGroupMessageUrgency(groqKey, payload.message) : ''
+    const prefix = isInternalGroup && ownerMentioned ? '📌 Você foi marcado num grupo interno' : '📢 Mensagem em grupo'
+
+    const text = `${prefix} — ${senderLabel}:\n"${payload.message.slice(0, 300)}"${
       assessment ? `\n\n${assessment}` : ''
     }`
     await sendEvolutionText(instance, ownerPhone, text)
@@ -786,6 +845,13 @@ async function handleGroupMessage(
   }
 }
 
+/** Confere se o telefone do dono está entre os @-marcados na mensagem (tolerante ao 9º dígito). */
+function isOwnerMentioned(ownerPhone: string, mentionedPhones: string[] | undefined): boolean {
+  if (!mentionedPhones || mentionedPhones.length === 0) return false
+  const ownerVariants = new Set(phoneVariants(ownerPhone))
+  return mentionedPhones.some((p) => ownerVariants.has(p))
+}
+
 async function getOwnerWhatsappPhone(supabase: ReturnType<typeof createClient>): Promise<string | null> {
   const { data } = await supabase
     .from('users')
@@ -793,6 +859,54 @@ async function getOwnerWhatsappPhone(supabase: ReturnType<typeof createClient>):
     .eq('id', OWNER_RESTRICTED_USER_ID)
     .maybeSingle()
   return (data?.whatsapp_phone as string | undefined) ?? null
+}
+
+/**
+ * Classificador mais rígido pros 4 grupos internos da TettoHub (equipe de
+ * produção). A régua não é "isso é importante?" — quase toda mensagem de
+ * trabalho é — é "só o DONO da empresa consegue resolver isso, e é urgente?"
+ * (ex: cliente ameaçando cancelar, decisão financeira/contratual, conflito
+ * sério entre a equipe, prazo crítico batendo). Atualização de progresso,
+ * dúvida técnica entre a equipe, ou aviso rotineiro não deve notificar.
+ */
+async function assessInternalGroupUrgency(
+  apiKey: string,
+  message: string,
+): Promise<{ shouldNotify: boolean; reason: string }> {
+  try {
+    const res = await fetchWithTimeout(
+      'https://api.groq.com/openai/v1/chat/completions',
+      {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: 'llama-3.3-70b-versatile',
+          temperature: 0.1,
+          max_tokens: 80,
+          response_format: { type: 'json_object' },
+          messages: [
+            {
+              role: 'system',
+              content:
+                'Você filtra mensagens de um grupo INTERNO de produção da agência TettoHub (equipe conversando entre si — design, edição de vídeo, estagiários) pra decidir se o DONO da empresa precisa ser interrompido. ' +
+                'A régua é rígida: só notifique se for urgente E for algo que só o dono consegue resolver — ex: cliente insatisfeito/ameaçando cancelar, decisão financeira ou contratual, conflito sério entre a equipe, prazo crítico estourando sem solução, pedido de demissão. ' +
+                'NÃO notifique para: atualização de progresso de trabalho, dúvida técnica entre a equipe, aviso rotineiro, arquivo/link compartilhado, combinados de horário, conversa social. ' +
+                'Responda em JSON: {"notify": true|false, "reason": "frase curta em português explicando por quê"}.',
+            },
+            { role: 'user', content: message },
+          ],
+        }),
+      },
+      8000,
+    )
+    const body = await res.json()
+    const content = (body?.choices?.[0]?.message?.content as string | undefined) ?? '{}'
+    const parsed = JSON.parse(content) as { notify?: boolean; reason?: string }
+    return { shouldNotify: !!parsed.notify, reason: parsed.reason ?? '' }
+  } catch (err) {
+    console.error('assessInternalGroupUrgency failed', err)
+    return { shouldNotify: false, reason: '' }
+  }
 }
 
 async function assessGroupMessageUrgency(apiKey: string, message: string): Promise<string> {

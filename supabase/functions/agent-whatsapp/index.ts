@@ -190,6 +190,7 @@ interface Payload {
 
 type NormalizeResult =
   | { kind: 'payload'; payload: Payload }
+  | { kind: 'from_me'; phone: string; message: string; messageId: string | undefined; isGroup: boolean }
   | { kind: 'skip' }
   | { kind: 'invalid' }
 
@@ -207,19 +208,30 @@ Deno.serve(async (req) => {
 
     const rawBody = await req.json()
     const normalized = await normalizePayload(rawBody)
+
+    const supabase = createClient(
+      Deno.env.get('SUPABASE_URL')!,
+      Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!,
+    )
+
     if (normalized.kind === 'skip') {
       return json({ ok: true, skipped: true })
     }
     if (normalized.kind === 'invalid') {
       return json({ error: 'phone e message obrigatórios' }, 400)
     }
+    if (normalized.kind === 'from_me') {
+      // Mensagem que SAIU da conta da agência — só interessa se foi alguém
+      // da equipe digitando de verdade no WhatsApp (não a Evolution nem o
+      // Hermes). handlePossibleHumanReply distingue os dois casos.
+      if (!normalized.isGroup) {
+        await handlePossibleHumanReply(supabase, normalized.phone, normalized.message, normalized.messageId)
+      }
+      return json({ ok: true, from_me: true })
+    }
     const payload = normalized.payload
     const instance = payload.instance || Deno.env.get('EVOLUTION_INSTANCE') || undefined
 
-    const supabase = createClient(
-      Deno.env.get('SUPABASE_URL')!,
-      Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!,
-    )
     const groqKey = Deno.env.get('GROQ_API_KEY')
 
     // Hermes: se o telefone é de um membro da equipe (users.whatsapp_phone),
@@ -291,8 +303,8 @@ Deno.serve(async (req) => {
         }
         await sendEvolutionPresence(instance, payload.phone, 'paused')
       } else {
-        await logConversation(supabase, client, payload, result.reply, false)
-        await sendEvolutionText(instance, payload.phone, result.reply)
+        const sentId = await sendEvolutionText(instance, payload.phone, result.reply)
+        await logConversation(supabase, client, payload, result.reply, false, sentId)
         await sendEvolutionPresence(instance, payload.phone, 'paused')
       }
 
@@ -336,8 +348,8 @@ Deno.serve(async (req) => {
       const reply =
         'Recebi sua mensagem. Vou encaminhar para um especialista da equipe TettoHub continuar o atendimento, ok?'
       await logHistory(supabase, client, payload, reply, route.department, true, compliance.reason)
-      await logConversation(supabase, client, payload, reply, true)
-      await sendEvolutionText(instance, payload.phone, reply)
+      const sentId = await sendEvolutionText(instance, payload.phone, reply)
+      await logConversation(supabase, client, payload, reply, true, sentId)
       await sendEvolutionPresence(instance, payload.phone, 'paused')
       return json({
         reply,
@@ -416,8 +428,8 @@ Deno.serve(async (req) => {
       }
       await sendEvolutionPresence(instance, payload.phone, 'paused')
     } else {
-      await logConversation(supabase, client, payload, reply, route.needsHuman)
-      await sendEvolutionText(instance, payload.phone, reply)
+      const sentId = await sendEvolutionText(instance, payload.phone, reply)
+      await logConversation(supabase, client, payload, reply, route.needsHuman, sentId)
       await sendEvolutionPresence(instance, payload.phone, 'paused')
     }
 
@@ -481,14 +493,16 @@ async function normalizePayload(raw: unknown): Promise<NormalizeResult> {
   const data = body.data as Record<string, unknown> | undefined
   if (data && typeof data === 'object' && data.key) {
     const key = data.key as { remoteJid?: string; fromMe?: boolean; id?: string; participant?: string }
-    if (key.fromMe) return { kind: 'skip' } // eco da própria resposta do bot
 
     const remoteJid = key.remoteJid ?? ''
     const isGroup = remoteJid.endsWith('@g.us')
     // Em grupo, remoteJid é o JID do grupo — quem mandou de verdade é
     // key.participant. Grupo não passa pelo fluxo normal de atendimento
     // (sem resposta automática ali), só monitoramento pra avisar o dono.
-    const senderJid = isGroup ? key.participant ?? '' : remoteJid
+    // Se fromMe=true (mensagem SAÍDA da conta da agência), remoteJid já é
+    // quem RECEBEU — é exatamente o telefone que precisamos pra achar a
+    // conversa, tanto faz o sentido.
+    const senderJid = isGroup && !key.fromMe ? key.participant ?? '' : remoteJid
     const phone = senderJid.replace(/@.*/, '').replace(/\D/g, '')
     if (!phone) return { kind: 'skip' }
 
@@ -504,6 +518,20 @@ async function normalizePayload(raw: unknown): Promise<NormalizeResult> {
     }
 
     if (!text?.trim()) return { kind: 'skip' } // tipo não suportado (figurinha, reação, etc.)
+
+    if (key.fromMe) {
+      // Mensagem SAÍDA da conta da agência — pode ser eco da nossa própria
+      // resposta automática (bot/Hermes) OU alguém da equipe digitando de
+      // verdade no WhatsApp. O handler principal decide qual é dos dois
+      // usando o messageId (compara com o que a gente mesmo mandou).
+      return {
+        kind: 'from_me',
+        phone,
+        message: text.trim(),
+        messageId: key.id,
+        isGroup,
+      }
+    }
 
     return {
       kind: 'payload',
@@ -652,6 +680,62 @@ async function resolveClient(
   }
 
   return null
+}
+
+/**
+ * Chamado quando o webhook manda de volta um evento fromMe=true — a
+ * mensagem SAIU da conta da agência, mas pode ser eco da nossa própria
+ * resposta automática (bot ou Hermes) OU alguém da equipe respondendo de
+ * verdade pelo WhatsApp (não pela CRM). Se for eco, reconhece pelo
+ * messageId (a gente mesmo grava esse id ao enviar) e ignora. Se não for,
+ * é resposta manual — registra como outbound humano na conversa do
+ * cliente, pra o flush-pending-replies enxergar que já responderam e não
+ * mandar a resposta da IA em cima.
+ */
+async function handlePossibleHumanReply(
+  supabase: ReturnType<typeof createClient>,
+  phone: string,
+  message: string,
+  messageId: string | undefined,
+) {
+  try {
+    if (messageId) {
+      const { data: ownMessage } = await supabase
+        .from('conversation_messages')
+        .select('id')
+        .eq('evolution_message_id', messageId)
+        .maybeSingle()
+      if (ownMessage) return // eco da nossa própria resposta, ignora
+    }
+
+    const client = await resolveClient(supabase, { phone, message: '' })
+    if (!client) return // não é telefone de cliente conhecido
+
+    const variants = phoneVariants(phone)
+    const { data: conversation } = await supabase
+      .from('conversations')
+      .select('id')
+      .eq('client_id', client.id as string)
+      .eq('channel', 'whatsapp')
+      .in('contact_phone', variants.length > 0 ? variants : [phone])
+      .maybeSingle()
+    if (!conversation) return // sem conversa existente ainda, não força criar uma
+
+    await supabase.from('conversation_messages').insert({
+      workspace_id: client.workspace_id as string,
+      conversation_id: conversation.id as string,
+      client_id: client.id as string,
+      direction: 'outbound',
+      content: message,
+      is_ai: false,
+    })
+    await supabase
+      .from('conversations')
+      .update({ last_message_at: new Date().toISOString(), updated_at: new Date().toISOString() })
+      .eq('id', conversation.id as string)
+  } catch (err) {
+    console.error('handlePossibleHumanReply failed', err)
+  }
 }
 
 /**
@@ -1481,7 +1565,7 @@ async function executeWriteTool(
         throw new Error('Informe to_team_member_name, to_client_name ou to_phone.')
       }
 
-      await sendEvolutionText(undefined, targetPhone, message)
+      const sentMessageId = await sendEvolutionText(undefined, targetPhone, message)
 
       // Se foi pra um cliente, também registra na thread do Inbox (mesma
       // lógica de logConversation) pra aparecer na tela de Mensagens do CRM.
@@ -1524,6 +1608,7 @@ async function executeWriteTool(
             direction: 'outbound',
             content: message,
             is_ai: true,
+            evolution_message_id: sentMessageId,
           })
         }
       } else {
@@ -2553,6 +2638,7 @@ async function logConversation(
   payload: Payload,
   reply: string | null,
   handoffRequired: boolean,
+  evolutionMessageId?: string | null,
 ): Promise<string | undefined> {
   try {
     const { data: existing } = await supabase
@@ -2617,6 +2703,7 @@ async function logConversation(
         direction: 'outbound',
         content: reply,
         is_ai: true,
+        evolution_message_id: evolutionMessageId ?? null,
       })
     }
     await supabase.from('conversation_messages').insert(rows)
@@ -2628,7 +2715,7 @@ async function logConversation(
   }
 }
 
-const BOT_REPLY_DELAY_MS = 45_000
+const BOT_REPLY_DELAY_MS = 90_000
 
 /**
  * Engatilha a resposta da IA pra sair só depois de 90s — dá tempo do social
@@ -2764,17 +2851,32 @@ function evolutionConfig(instance: string | undefined) {
   return { base, apiKey, inst }
 }
 
-async function sendEvolutionText(instance: string | undefined, phone: string, text: string) {
+/**
+ * Retorna o id da mensagem no WhatsApp (key.id da resposta da Evolution),
+ * ou null se falhar/não configurado. Esse id é gravado junto do outbound
+ * em conversation_messages pra depois reconhecer o eco dessa mesma
+ * mensagem voltando pelo webhook (fromMe=true) como "nosso próprio envio"
+ * e não confundir com resposta manual de alguém digitando no WhatsApp.
+ */
+async function sendEvolutionText(
+  instance: string | undefined,
+  phone: string,
+  text: string,
+): Promise<string | null> {
   const cfg = evolutionConfig(instance)
-  if (!cfg) return
+  if (!cfg) return null
   try {
-    await fetchWithTimeout(`${cfg.base}/message/sendText/${cfg.inst}`, {
+    const res = await fetchWithTimeout(`${cfg.base}/message/sendText/${cfg.inst}`, {
       method: 'POST',
       headers: { apikey: cfg.apiKey, 'Content-Type': 'application/json' },
       body: JSON.stringify({ number: phone, text }),
     })
+    const body = await res.json().catch(() => null)
+    const id = body?.key?.id
+    return typeof id === 'string' ? id : null
   } catch (err) {
     console.error('sendEvolutionText failed', err)
+    return null
   }
 }
 

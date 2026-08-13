@@ -88,7 +88,7 @@ Deno.serve(async (req) => {
           continue
         }
 
-        await sendEvolutionText(row.instance ?? undefined, row.phone, row.reply_text)
+        const sentId = await sendEvolutionText(row.instance ?? undefined, row.phone, row.reply_text)
 
         await supabase.from('conversation_messages').insert({
           workspace_id: row.workspace_id,
@@ -97,6 +97,7 @@ Deno.serve(async (req) => {
           direction: 'outbound',
           content: row.reply_text,
           is_ai: true,
+          evolution_message_id: sentId,
         })
         await supabase
           .from('conversations')
@@ -139,18 +140,25 @@ function evolutionConfig(instance: string | undefined) {
   return { base, apiKey, inst }
 }
 
-async function sendEvolutionText(instance: string | undefined, phone: string, text: string) {
+async function sendEvolutionText(
+  instance: string | undefined,
+  phone: string,
+  text: string,
+): Promise<string | null> {
   const cfg = evolutionConfig(instance)
-  if (!cfg) return
+  if (!cfg) return null
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), 8000)
   try {
-    await fetch(`${cfg.base}/message/sendText/${cfg.inst}`, {
+    const res = await fetch(`${cfg.base}/message/sendText/${cfg.inst}`, {
       method: 'POST',
       headers: { apikey: cfg.apiKey, 'Content-Type': 'application/json' },
       body: JSON.stringify({ number: phone, text }),
       signal: controller.signal,
     })
+    const body = await res.json().catch(() => null)
+    const id = body?.key?.id
+    return typeof id === 'string' ? id : null
   } finally {
     clearTimeout(timer)
   }

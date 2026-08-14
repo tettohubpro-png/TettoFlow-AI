@@ -2,11 +2,12 @@ import { Navigate, Outlet, useLocation } from 'react-router-dom'
 import { useAuth } from '@/contexts/AuthContext'
 import { AppShell } from '@/components/layout/AppShell'
 import { ForceChangePasswordModal } from '@/components/auth/ForceChangePasswordModal'
+import { PendingAccessScreen } from '@/components/auth/PendingAccessScreen'
 import { AutoPunchClock } from '@/hooks/useWorkSessions'
 import { canAccessPath } from '@/utils/permissions'
 
 export function ProtectedRoute() {
-  const { user, loading, role, mustChangePassword } = useAuth()
+  const { user, loading, role, mustChangePassword, appUser, accessStatus } = useAuth()
   const location = useLocation()
 
   if (loading) {
@@ -18,6 +19,10 @@ export function ProtectedRoute() {
   }
 
   if (!user) return <Navigate to="/login" replace />
+
+  if (!appUser || accessStatus) {
+    return <PendingAccessScreen status={accessStatus === 'blocked' ? 'blocked' : 'pending'} />
+  }
 
   if (role && !canAccessPath(role, location.pathname)) {
     return <Navigate to="/" replace />

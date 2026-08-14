@@ -16,12 +16,16 @@ export type OperationPriority = 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL'
 /** Segmento regulatório para compliance de IA (WhatsApp) */
 export type ClientSegment = 'legal' | 'health_aesthetics' | 'electoral' | 'general'
 
+export type AccessStatus = 'pending' | 'active' | 'blocked'
+
 export interface AppUser {
   id: string
   name: string
   email: string
   avatar_url: string | null
   must_change_password?: boolean
+  access_status?: AccessStatus
+  auth_provider?: string | null
   created_at: string
   updated_at: string
 }

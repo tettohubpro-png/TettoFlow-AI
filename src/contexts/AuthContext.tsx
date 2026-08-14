@@ -22,6 +22,8 @@ interface AuthContextValue {
   role: MembershipRole | null
   loading: boolean
   mustChangePassword: boolean
+  /** Preenchido quando o usuário está autenticado mas ainda não tem acesso liberado. */
+  accessStatus: 'pending' | 'blocked' | null
   signIn: (email: string, password: string) => Promise<{ error: string | null }>
   signInWithGoogle: () => Promise<{ error: string | null }>
   signOut: () => Promise<void>
@@ -40,8 +42,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [membership, setMembership] = useState<Membership | null>(null)
   const [workspace, setWorkspace] = useState<Workspace | null>(null)
   const [loading, setLoading] = useState(true)
+  const [accessStatus, setAccessStatus] = useState<'pending' | 'blocked' | null>(null)
 
   const loadAppContext = useCallback(async (userId: string) => {
+    setAccessStatus(null)
+
     const { data: userRow, error: userErr } = await supabase
       .from('users')
       .select('*')
@@ -56,10 +61,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       return
     }
 
-    if (!userRow) {
+    let currentUserRow = userRow as AppUser | null
+
+    if (!currentUserRow) {
       // Só cria OWNER na instalação inicial (zero workspaces). Depois disso,
-      // usuários sem membership precisam ser convidados pelo Master.
-      const { error: bootErr } = await supabase.rpc('bootstrap_my_workspace', {
+      // o login fica pendente até o Master autorizar no Controle de acesso.
+      const { data: newWorkspaceId, error: bootErr } = await supabase.rpc('bootstrap_my_workspace', {
         p_name: 'TettoHub',
       })
       if (bootErr) {
@@ -67,18 +74,36 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setAppUser(null)
         setMembership(null)
         setWorkspace(null)
+        setAccessStatus('pending')
         return
       }
       const { data: retryUser } = await supabase.from('users').select('*').eq('id', userId).maybeSingle()
-      if (!retryUser) {
+      currentUserRow = (retryUser as AppUser) ?? null
+
+      if (!newWorkspaceId) {
+        // Conta autenticada, sem membership ainda: pendente ou bloqueada.
+        setAppUser(currentUserRow)
+        setMembership(null)
+        setWorkspace(null)
+        setAccessStatus(currentUserRow?.access_status === 'blocked' ? 'blocked' : 'pending')
+        return
+      }
+      if (!currentUserRow) {
         setAppUser(null)
         setMembership(null)
         setWorkspace(null)
         return
       }
-      setAppUser(retryUser as AppUser)
+      setAppUser(currentUserRow)
     } else {
-      setAppUser(userRow as AppUser)
+      setAppUser(currentUserRow)
+    }
+
+    if (currentUserRow.access_status === 'blocked') {
+      setMembership(null)
+      setWorkspace(null)
+      setAccessStatus('blocked')
+      return
     }
 
     const { data: membershipRow, error: memErr } = await supabase
@@ -96,6 +121,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       )
       setMembership(null)
       setWorkspace(null)
+      setAccessStatus('pending')
       return
     }
 
@@ -217,6 +243,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       role,
       loading,
       mustChangePassword,
+      accessStatus,
       signIn,
       signInWithGoogle,
       signOut,
@@ -234,6 +261,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       role,
       loading,
       mustChangePassword,
+      accessStatus,
       signIn,
       signInWithGoogle,
       signOut,

@@ -1,5 +1,6 @@
 import { useMemo, useState, type FormEvent } from 'react'
 import { Navigate } from 'react-router-dom'
+import { Settings, UserPlus } from 'lucide-react'
 import { useTeamMembers } from '@/hooks/useTeamMembers'
 import { useClientAssignments } from '@/hooks/useClientAssignments'
 import { useAuth } from '@/contexts/AuthContext'
@@ -15,9 +16,11 @@ import { DEPARTMENT_LABELS } from '@/utils/departments'
 import {
   createTeamMember,
   deleteTeamMember,
+  inviteTeamMember,
   updateTeamMemberPhone,
   updateTeamMemberRole,
 } from '@/services/teamAdmin'
+import { AccessControlModal } from '@/components/team/AccessControlModal'
 
 export function TeamPage() {
   const { role, user } = useAuth()
@@ -37,6 +40,18 @@ export function TeamPage() {
   })
   const [phoneDrafts, setPhoneDrafts] = useState<Record<string, string>>({})
   const [savingPhoneId, setSavingPhoneId] = useState<string | null>(null)
+
+  const [showInvite, setShowInvite] = useState(false)
+  const [inviting, setInviting] = useState(false)
+  const [inviteDone, setInviteDone] = useState<string | null>(null)
+  const [inviteForm, setInviteForm] = useState({
+    name: '',
+    email: '',
+    role: 'MEMBER' as Extract<MembershipRole, 'MANAGER' | 'MEMBER'>,
+    job_role: '' as JobRole | '',
+  })
+
+  const [showAccessControl, setShowAccessControl] = useState(false)
 
   const canEdit = canManageTeam(role)
 
@@ -120,28 +135,151 @@ export function TeamPage() {
     setSavingId(null)
   }
 
+  const handleInvite = async (e: FormEvent) => {
+    e.preventDefault()
+    setInviting(true)
+    setError(null)
+    setInviteDone(null)
+    const result = await inviteTeamMember({
+      name: inviteForm.name.trim(),
+      email: inviteForm.email.trim(),
+      role: inviteForm.role,
+      job_role: inviteForm.job_role || null,
+    })
+    setInviting(false)
+    if (result.error) {
+      setError(result.error)
+      return
+    }
+    setInviteDone(inviteForm.email.trim())
+    setInviteForm({ name: '', email: '', role: 'MEMBER', job_role: '' })
+    await refresh()
+  }
+
   return (
     <div>
       <header className="mb-4 flex flex-col gap-3 sm:mb-6 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h2 className="tf-title text-xl sm:text-2xl">Equipe</h2>
           <p className="tf-subtitle mt-1">
-            Somente o Master cria e remove funcionários e gerentes
+            Somente o Master cria, convida e remove funcionários e gerentes
           </p>
         </div>
-        <button
-          type="button"
-          onClick={() => setShowForm((v) => !v)}
-          className="tf-btn tf-btn-primary"
-        >
-          {showForm ? 'Cancelar' : 'Novo usuário'}
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => {
+              setShowInvite((v) => !v)
+              setShowForm(false)
+            }}
+            className="tf-btn tf-btn-ghost"
+          >
+            <UserPlus size={15} />
+            {showInvite ? 'Cancelar' : 'Enviar convite'}
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setShowForm((v) => !v)
+              setShowInvite(false)
+            }}
+            className="tf-btn tf-btn-primary"
+          >
+            {showForm ? 'Cancelar' : 'Novo usuário'}
+          </button>
+          <button
+            type="button"
+            onClick={() => setShowAccessControl(true)}
+            aria-label="Controle de acesso"
+            title="Controle de acesso"
+            className="tf-btn tf-btn-ghost"
+            style={{ width: 44, padding: 0 }}
+          >
+            <Settings size={16} />
+          </button>
+        </div>
       </header>
 
       {(error || loadError) && (
         <p className="mb-3 text-sm" style={{ color: 'var(--color-danger)' }}>
           {error || loadError}
         </p>
+      )}
+
+      {inviteDone && (
+        <p
+          className="mb-3 rounded-[10px] px-3 py-2 text-sm"
+          style={{ background: 'var(--color-success-dim)', color: 'var(--color-success)' }}
+        >
+          Convite enviado para {inviteDone}. Quando a pessoa aceitar, já entra com o papel definido.
+        </p>
+      )}
+
+      {showInvite && (
+        <form onSubmit={handleInvite} className="tf-window mb-6 grid gap-3 p-4 sm:grid-cols-2">
+          <label>
+            <span className="tf-label">Nome</span>
+            <input
+              className="tf-input"
+              required
+              value={inviteForm.name}
+              onChange={(e) => setInviteForm({ ...inviteForm, name: e.target.value })}
+            />
+          </label>
+          <label>
+            <span className="tf-label">E-mail</span>
+            <input
+              type="email"
+              className="tf-input"
+              required
+              value={inviteForm.email}
+              onChange={(e) => setInviteForm({ ...inviteForm, email: e.target.value })}
+            />
+          </label>
+          <label>
+            <span className="tf-label">Papel</span>
+            <select
+              className="tf-select"
+              value={inviteForm.role}
+              onChange={(e) =>
+                setInviteForm({
+                  ...inviteForm,
+                  role: e.target.value as Extract<MembershipRole, 'MANAGER' | 'MEMBER'>,
+                })
+              }
+            >
+              {ASSIGNABLE_ROLES.map((r) => (
+                <option key={r} value={r}>
+                  {ROLE_LABELS[r]}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            <span className="tf-label">Função operacional</span>
+            <select
+              className="tf-select"
+              value={inviteForm.job_role}
+              onChange={(e) => setInviteForm({ ...inviteForm, job_role: e.target.value as JobRole | '' })}
+            >
+              <option value="">Sem função</option>
+              {JOB_ROLE_ORDER.map((jr) => (
+                <option key={jr} value={jr}>
+                  {JOB_ROLE_LABELS[jr]}
+                </option>
+              ))}
+            </select>
+          </label>
+          <p className="text-xs sm:col-span-2" style={{ color: 'var(--color-text3)' }}>
+            Enviamos um e-mail com um link de acesso. O papel e a função já ficam configurados —
+            a pessoa só define a senha dela.
+          </p>
+          <div className="sm:col-span-2">
+            <button type="submit" disabled={inviting} className="tf-btn tf-btn-primary">
+              {inviting ? 'Enviando…' : 'Enviar convite'}
+            </button>
+          </div>
+        </form>
       )}
 
       {showForm && (
@@ -369,6 +507,8 @@ export function TeamPage() {
           })}
         </div>
       )}
+
+      <AccessControlModal open={showAccessControl} onClose={() => setShowAccessControl(false)} />
     </div>
   )
 }

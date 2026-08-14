@@ -18,6 +18,7 @@
 | LES-0008 | Canva Connect API | Aprendizado | Autofill/edição de elemento exige conta Enterprise; cópia+rename não | Vigente | 2026-08-14 |
 | LES-0009 | Cadastro de cliente sem telefone | Erro | Cliente sem `client_contacts` gera duplicidade real quando manda mensagem de novo | Vigente | 2026-08-13 |
 | LES-0010 | Ambiente da sessão vs caminho do usuário | Aprendizado | Prompt do usuário pode referenciar ambiente diferente (Windows) do real (Linux) — confirmar antes de agir | Vigente | 2026-08-14 |
+| LES-0011 | Tettolino — confirmação pendente | Erro | Ação pendente sem expiração travava TODAS as mensagens seguintes num loop de "não entendi" | Vigente | 2026-08-14 |
 
 ## Regras preventivas consolidadas
 
@@ -345,6 +346,58 @@
   de recursos externos (repositórios, pastas) que pareçam não bater com o ambiente
   observável da sessão atual.
 - **Confiança:** Alta
+
+### LES-0011 — Ação pendente sem expiração travava toda mensagem seguinte num loop de "não entendi"
+- **Status:** Vigente
+- **Tipo:** Erro
+- **Severidade:** Alta
+- **Área/módulo:** `agent-whatsapp` — `handleHermesMessage`, `handlePendingConfirmation`,
+  tabela `agent_actions_log`
+- **Primeira ocorrência:** não determinada (mecanismo existia desde a implementação
+  original do Hermes, 2026-08-11)
+- **Última ocorrência:** 2026-08-14, confirmada em dados reais de produção (usuário
+  mandou "ainda tem mais, nao se preocupe..." e "precisa aprender o quanto antes" e
+  recebeu a mesma resposta engessada duas vezes seguidas)
+- **Última validação:** 2026-08-14, teste real via webhook simulando o mesmo padrão
+- **Sintoma:** usuário reportou (com print) o Tettolino respondendo "Não entendi.
+  Confirma essa ação? Responda sim ou não." de forma **idêntica** 4 vezes seguidas pra
+  mensagens completamente diferentes entre si.
+- **Contexto:** usuário dava uma instrução que gerava uma ação de escrita pendente
+  (ex: create_task), e todas as mensagens seguintes — mesmo sendo sobre assuntos
+  diferentes, inclusive recados pra outra pessoa da equipe — eram capturadas pela
+  checagem de "tem pendência? então isso deve ser sim/não" e não pela conversa normal.
+- **Causa raiz:** `handleHermesMessage` busca por qualquer linha em
+  `agent_actions_log` com `status='pending_confirmation'` pro operador; se existir,
+  TODA mensagem seguinte passa por `interpretConfirmation` (regex estrita) antes de
+  qualquer outra coisa. Se não bater com sim/não, `handlePendingConfirmation` retornava
+  um texto FIXO repetido, sem limite de tentativas nem expiração — travando a conversa
+  indefinidamente até o usuário digitar literalmente algo que combine com a regex.
+- **Impacto:** usuário ficava "preso" numa conversa que não avançava, tinha que digitar
+  exatamente "sim"/"não" pra escapar, mesmo quando claramente tinha mudado de assunto.
+- **Tentativas que falharam:** nenhuma tentada antes desta — o bug não tinha sido
+  diagnosticado até então (relatos anteriores do usuário foram interpretados como pedido
+  de ajuste de comportamento geral, não como um bug de estado travado).
+- **Solução aplicada:** quando `interpretConfirmation` retorna `'unclear'`, a ação
+  pendente é marcada como `'superseded'` (novo status, adicionado ao check constraint) e
+  a mensagem é processada normalmente pelo fluxo do Tettolino (com tool-calling completo)
+  em vez de repetir o texto fixo. O histórico recente de conversa ainda dá contexto pro
+  modelo, então se o usuário só reformulou o mesmo pedido, ele percebe e propõe de novo.
+- **Validação da solução:** teste real via webhook — mensagem "unclear" após uma
+  pendência não repetiu o texto fixo, foi processada como pedido novo (buscou na base de
+  conhecimento, e re-propôs a ação original com nova confirmação, já que o contexto
+  ainda era relevante); confirmado no banco que a ação antiga ficou `superseded` e uma
+  nova `pending_confirmation` foi criada.
+- **Regra preventiva:** qualquer mecanismo de "estado pendente que bloqueia a próxima
+  mensagem" (confirmação, formulário multi-passo, etc.) precisa ter uma saída que não
+  dependa só do usuário acertar o formato exato esperado — supere a pendência quando a
+  mensagem não bater com o formato esperado, em vez de repetir a mesma cobrança
+  indefinidamente.
+- **Quando esta regra se aplica:** qualquer fluxo conversacional com estado pendente
+  (confirmações, wizards, coleta de dados em etapas).
+- **Skills relacionadas:** SKL-0004
+- **Referências:** migration `20260814090000_agent_actions_log_superseded_status.sql`.
+- **Confiança:** Alta (reproduzido e corrigido, com evidência de dados reais de produção
+  mostrando o bug acontecendo antes do fix)
 
 ## Registro rápido durante a tarefa
 

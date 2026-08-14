@@ -3,8 +3,9 @@
 ## Metadados
 - Projeto: TettoFlow AI OS (produto interno da agência TettoHub)
 - Repositório: `tettohubpro-png/TettoFlow-AI` (GitHub, remote `origin`)
-- Última atualização: 2026-08-14T07:20:00-03:00
-- Branch de referência: `claude/vps-access-connection-z05wyj`, commit `cc7f1d9`
+- Última atualização: 2026-08-14T13:58:00+00:00
+- Branch de referência: `claude/vps-access-connection-z05wyj` — ver Pendência #0 sobre
+  divergência com `main`
 - Status geral: em produção, uso ativo diário pela agência (não é protótipo)
 
 ## Visão e objetivo
@@ -196,6 +197,16 @@ full-text (accent-insensitive), automação parcial de nota de pesar.
 - Base de conhecimento — estrutura pronta, conteúdo ainda não cadastrado.
 
 ## Pendências priorizadas
+0. **[URGENTE, não técnico] Reconciliar a branch `main` com `claude/vps-access-connection-z05wyj`**
+   — descoberto em 2026-08-14: `main` recebeu um commit (`beeac19`, "implement compliance
+   logging and RLS isolation tests ADR-001/ADR-002") feito fora desta sessão, que se
+   baseia num estado muito mais antigo do repositório. Um merge ingênuo de `origin/main`
+   nesta branch APAGARIA ~2600 linhas de `agent-whatsapp/index.ts` (todo o Tettolino,
+   grupos, base de conhecimento) e os arquivos inteiros de `flush-pending-replies`,
+   `send-message`, além de todas as migrations recentes. **Não fazer merge/pull de
+   `main` sem decisão explícita do usuário sobre qual conteúdo é o correto pra cada
+   arquivo.** Produção está segura (a edge function implantada reflete esta branch, não
+   `main`) — o risco é só se alguém mesclar os branches sem cuidado.
 1. **Cadastrar telefone dos 13 clientes ativos sem contato** — causa raiz confirmada de
    duplicidade de cadastro (bloqueia reconhecimento automático).
 2. **Cadastrar André e Marcos (edição de vídeo) na equipe** — sem `job_role` de
@@ -223,6 +234,12 @@ full-text (accent-insensitive), automação parcial de nota de pesar.
   automático pro dono, exceto se ele for marcado ou a mensagem for urgente e só ele resolver.
 - Edição automática de design no Canva não é viável no plano atual do cliente (exige
   Enterprise) — só cópia+renome são automatizados, a edição de conteúdo continua manual.
+- Ação de escrita pendente de confirmação no Tettolino nunca fica travando a conversa
+  indefinidamente: se a mensagem seguinte não for claramente sim/não, a pendência é
+  superada (`status='superseded'`) e a mensagem é tratada como pedido novo — ver
+  `PROJECT_LESSONS.md` LES-0011.
+- Mensagem que só nomeia outro membro da equipe como destinatário/executor (recado, não
+  pedido direto) não gera tool call nem pedido de confirmação do Tettolino.
 
 ## Restrições, invariantes e regras de negócio
 - Single-tenant real hoje: só existe 1 workspace de verdade (TettoHub), embora o schema

@@ -1437,7 +1437,8 @@ Regras:
 5. Respostas curtas e diretas — 1 a 3 frases, no máximo. Nada de parágrafo explicando contexto óbvio ou listando tudo que você fez passo a passo. Está no WhatsApp, não é um relatório. Só entra em mais detalhe se o usuário pedir explicitamente.
 6. Se não entender o pedido ou faltar informação (ex: qual cliente, qual tarefa), pergunte antes de agir — em uma frase curta.
 7. Quando o usuário pedir um serviço (arte pra post, gravação, edição, tráfego) sem dizer quem deve fazer, use create_task com "department" em vez de perguntar quem é o responsável — a agência já tem gente fixa pra cada função.
-8. search_knowledge é a sua base de memória e raciocínio — não só pra política/preço/procedimento: chame ela SEMPRE que a pergunta não for resolvida diretamente por search_clients/search_team/get_client_summary/check_messages, antes de responder e antes de dizer "não sei" ou "não tenho essa informação". Só responda com o que vier da busca (ou do CRM); se não achar nada em nenhuma das duas, diga claramente que não tem isso registrado em vez de inventar ou usar conhecimento genérico.`
+8. search_knowledge é a sua base de memória e raciocínio — não só pra política/preço/procedimento: chame ela SEMPRE que a pergunta não for resolvida diretamente por search_clients/search_team/get_client_summary/check_messages, antes de responder e antes de dizer "não sei" ou "não tenho essa informação". Só responda com o que vier da busca (ou do CRM); se não achar nada em nenhuma das duas, diga claramente que não tem isso registrado em vez de inventar ou usar conhecimento genérico.
+9. Se a mensagem for claramente um RECADO pra outra pessoa da equipe (nomeia alguém como quem vai fazer/receber aquilo — ex: termina com o nome de alguém, ou diz "isso é pra fulano", "avisa fulano", "manda isso pro fulano ver") e não for um pedido direto pra você agir, NÃO tente encaixar numa ferramenta nem pergunte "confirma?" — é conversa/anotação que o usuário está organizando, não uma ordem pra você executar. Só reconheça em uma frase curta (ex: "Beleza, deixo anotado que é pra Eduarda.") e não chame nenhuma ferramenta. Se não for óbvio se é recado ou pedido de ação, pergunte antes de agir (regra 6).`
 }
 
 async function callClaudeMessages(
@@ -1552,7 +1553,7 @@ async function logAgentAction(
 async function updateAgentAction(
   supabase: ReturnType<typeof createClient>,
   id: string,
-  fields: { status: 'confirmed' | 'rejected' | 'executed' | 'failed'; result?: unknown; error?: string },
+  fields: { status: 'confirmed' | 'rejected' | 'executed' | 'failed' | 'superseded'; result?: unknown; error?: string },
 ) {
   await supabase
     .from('agent_actions_log')
@@ -2255,11 +2256,10 @@ async function handlePendingConfirmation(
   pending: { id: string; tool_name: string; input: Record<string, unknown> },
   message: string,
 ): Promise<string> {
+  // Só é chamada quando interpretConfirmation já deu 'yes' ou 'no' — o caso
+  // 'unclear' é resolvido antes, em handleHermesMessage, superando a
+  // pendência em vez de travar a conversa (ver comentário lá).
   const decision = interpretConfirmation(message)
-
-  if (decision === 'unclear') {
-    return 'Não entendi. Confirma essa ação? Responda *sim* ou *não*.'
-  }
 
   if (decision === 'no') {
     await updateAgentAction(supabase, pending.id, { status: 'rejected' })
@@ -2506,13 +2506,26 @@ async function handleHermesMessage(
 
   const apiKey = Deno.env.get('ANTHROPIC_API_KEY')
 
+  // Se tem ação pendente mas a mensagem nova não é claramente sim/não, NÃO
+  // trava a conversa pedindo confirmação de novo pra sempre (bug real: 4
+  // mensagens seguidas do usuário, nenhuma relacionada à ação pendente,
+  // geraram a mesma resposta engessada 4x). Supera a pendência em silêncio
+  // e processa a mensagem nova normalmente — o histórico recente ainda dá
+  // contexto pro Tettolino, então se o usuário só reformulou o mesmo pedido,
+  // ele consegue perceber e propor a ação de novo.
+  let pendingToResolve = pending as { id: string; tool_name: string; input: Record<string, unknown> } | null
+  if (pendingToResolve && interpretConfirmation(payload.message) === 'unclear') {
+    await updateAgentAction(supabase, pendingToResolve.id, { status: 'superseded' })
+    pendingToResolve = null
+  }
+
   let reply: string
-  if (pending) {
+  if (pendingToResolve) {
     reply = await handlePendingConfirmation(
       supabase,
       workspaceId,
       operator.id,
-      pending as { id: string; tool_name: string; input: Record<string, unknown> },
+      pendingToResolve,
       payload.message,
     )
   } else if (!apiKey) {

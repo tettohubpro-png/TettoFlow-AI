@@ -5,6 +5,42 @@
 > deploys verificados, testes reais). Antes disso, ver "Linha de base histórica" ao final —
 > reconstruída a partir do `git log`, sem acesso a decisões não documentadas em commit.
 
+## 2026-08-14T13:57:00+00:00 — Corrige loop de confirmação travando o Tettolino
+
+- **Solicitação:** usuário mostrou print com o Tettolino respondendo "Não entendi.
+  Confirma essa ação?" de forma idêntica 4 vezes seguidas pra mensagens diferentes;
+  também pediu que mensagens claramente destinadas a outro membro da equipe (ex:
+  nomeando "Eduarda") não fossem tratadas como ação pra ele executar.
+- **Causa raiz:** ação de escrita pendente sem expiração — toda mensagem seguinte do
+  operador era forçada a passar por uma checagem estrita de sim/não antes de qualquer
+  outra coisa; se não combinasse, repetia o mesmo texto fixo pra sempre.
+- **Alterações realizadas:** novo status `superseded` em `agent_actions_log`; quando a
+  mensagem não é claramente sim/não, a pendência é superada e a mensagem processada
+  normalmente pelo Tettolino (não mais bloqueada). Nova regra 9 no system prompt: recado
+  claramente destinado a outra pessoa da equipe não vira tool call nem pede confirmação,
+  só um reconhecimento curto.
+- **Arquivos afetados:** `supabase/functions/agent-whatsapp/index.ts`,
+  `supabase/migrations/20260814090000_agent_actions_log_superseded_status.sql`.
+- **Validação executada:** `deno check` sem erro novo além do padrão conhecido (24, igual
+  ao baseline). Teste real via webhook confirmou: mensagem "unclear" após pendência não
+  repetiu o texto fixo, foi processada como pedido novo; banco confirmou ação antiga
+  `superseded` e nova `pending_confirmation` criada corretamente. Deploy v43 verificado
+  byte a byte. Dados de teste (mensagens com prefixo "[TESTE QA]" e a mensagem exata
+  "nao" usada no teste) removidos ao final, sem tocar no histórico real do usuário.
+- **Impactos e compatibilidade:** o fluxo de confirmação sim/não em si não mudou — só o
+  caso "não é nem sim nem não" deixou de travar a conversa.
+- **Pendências/riscos:** achado incidental durante esta tarefa — o diretório de trabalho
+  local tinha sido trocado pra branch `main` (bem atrasada) por um processo externo à
+  sessão; voltado pra `claude/vps-access-connection-z05wyj` sem tocar em `main`. `main`
+  tem um commit (`beeac19`, ADR-001/002 + testes de RLS) que diverge fortemente do
+  trabalho desta branch — reconciliação NÃO foi feita, precisa de decisão humana (ver
+  `PROJECT_CONTEXT.md`).
+- **Próximo passo recomendado:** decidir com o usuário como reconciliar
+  `claude/vps-access-connection-z05wyj` (branch com todo o trabalho de produção,
+  incluindo os 4 documentos de contexto portátil) e `main` (tem trabalho próprio de
+  auditoria/RLS não presente nesta branch).
+- **Referência Git:** commit a ser criado nesta tarefa (ver `git log` mais recente).
+
 ## 2026-08-14T07:20:00-03:00 — Implantação da memória operacional portátil
 
 - **Agente/ambiente:** Claude Code (sessão longa, múltiplas tarefas)

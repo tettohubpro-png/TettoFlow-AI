@@ -19,6 +19,7 @@
 | LES-0009 | Cadastro de cliente sem telefone | Erro | Cliente sem `client_contacts` gera duplicidade real quando manda mensagem de novo | Vigente | 2026-08-13 |
 | LES-0010 | Ambiente da sessão vs caminho do usuário | Aprendizado | Prompt do usuário pode referenciar ambiente diferente (Windows) do real (Linux) — confirmar antes de agir | Vigente | 2026-08-14 |
 | LES-0011 | Tettolino — confirmação pendente | Erro | Ação pendente sem expiração travava TODAS as mensagens seguintes num loop de "não entendi" | Vigente | 2026-08-14 |
+| LES-0012 | Atendimento a cliente — fora do horário | Erro | Mensagem de "estamos fechados" ignorava delay/checagem de humano, atropelando resposta real da equipe fora do horário configurado | Vigente | 2026-08-14 |
 
 ## Regras preventivas consolidadas
 
@@ -398,6 +399,51 @@
 - **Referências:** migration `20260814090000_agent_actions_log_superseded_status.sql`.
 - **Confiança:** Alta (reproduzido e corrigido, com evidência de dados reais de produção
   mostrando o bug acontecendo antes do fix)
+
+### LES-0012 — Mensagem de "estamos fechados" atropelava resposta real da equipe fora do horário
+- **Status:** Vigente
+- **Tipo:** Erro
+- **Severidade:** Alta
+- **Área/módulo:** `agent-whatsapp` — fluxo principal e fluxo de lead-intake (branch
+  `!withinHours`)
+- **Primeira ocorrência:** não determinada (existia desde a introdução do delay de 90s,
+  `c1c4d35`, 2026-08-12)
+- **Última ocorrência:** confirmada em dados reais de produção em 2026-08-14 (conversa
+  com "AM Consultoria" — funcionária respondendo ao vivo às 20h08/20h12, e no meio dessa
+  troca real o bot mandou a mensagem de horário de atendimento por cima)
+- **Última validação:** 2026-08-14
+- **Sintoma:** usuário reportou "o fluxo de resposta ainda não está fazendo sentido" sem
+  print desta vez — investigado direto nos dados reais em vez de pedir mais detalhes
+  (aplicando LES-0006).
+- **Contexto:** fora do horário comercial configurado (8h30-12h/14h-17h, seg-sex), o
+  código mandava a mensagem "estamos fechados" IMEDIATAMENTE, sem o delay de 90s nem a
+  checagem de "humano já respondeu" que o fluxo dentro do horário já tinha.
+- **Causa raiz:** a suposição original ("fora do horário ninguém da equipe vai responder
+  mesmo, então não faz sentido esperar" — comentário literal que estava no código) era
+  falsa na prática: dados reais mostram a equipe respondendo clientes fora do horário
+  configurado com frequência.
+- **Impacto:** cliente recebia a mensagem automática de "fora do horário" por cima de uma
+  conversa que um humano já estava conduzindo ativamente — parecia (e era) um bug de
+  verdade, não só uma questão de tempo de espera.
+- **Solução aplicada:** unificado o fluxo — a resposta (seja o texto gerado normalmente
+  ou a mensagem de horário) sempre passa por `scheduleDeferredReply`/
+  `pending_bot_replies`, dentro ou fora do horário. Removido o branch que mandava
+  direto via `sendEvolutionText` fora do horário.
+- **Validação da solução:** `deno check` sem erro novo (na verdade caiu de 24 pra 22,
+  já que menos pontos de chamada geram menos instâncias do padrão sistêmico). Teste real
+  confirmou que a mensagem fica em `pending_bot_replies` com delay de 90s
+  independente do horário (testado dentro do horário — o código não tem mais branch
+  condicional pro caminho de envio, então vale igual pros dois casos por construção).
+  Deploy v44 verificado byte a byte.
+- **Regra preventiva:** desconfiar de comentários/suposições no código do tipo "fora
+  desse horário/condição, ninguém vai fazer X mesmo" — validar contra dados reais antes
+  de usar isso pra pular uma proteção (delay, checagem, etc.).
+- **Quando esta regra se aplica:** qualquer lógica condicional que pula uma proteção
+  (delay, confirmação, checagem) baseada numa suposição sobre quando humanos estão
+  "disponíveis" ou "não vão agir".
+- **Skills relacionadas:** SKL-0002
+- **Referências:** commit a ser criado nesta tarefa.
+- **Confiança:** Alta (evidência direta em dados reais de produção, não inferência)
 
 ## Registro rápido durante a tarefa
 

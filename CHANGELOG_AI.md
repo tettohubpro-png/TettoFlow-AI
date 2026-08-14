@@ -5,6 +5,33 @@
 > deploys verificados, testes reais). Antes disso, ver "Linha de base histórica" ao final —
 > reconstruída a partir do `git log`, sem acesso a decisões não documentadas em commit.
 
+## 2026-08-14T14:15:00+00:00 — Delay de 90s + checagem de humano passa a valer fora do horário comercial também
+
+- **Solicitação:** usuário reafirmou (sem print desta vez) que o fluxo de resposta
+  "ainda não está fazendo sentido" e que o agente só pode responder se ninguém responder
+  em 60-90s; pediu pra usar a memória do projeto e investigar direito.
+- **Investigação:** consultado `pending_bot_replies` (confirmou delay de 90s configurado
+  corretamente) e `conversation_messages` reais do cliente "AM Consultoria" — achado
+  concreto: uma funcionária respondendo ao vivo às 20h08/20h12, e no meio dessa troca
+  real o bot mandou a mensagem de horário de atendimento por cima, porque o branch
+  `!withinHours` mandava a mensagem na hora, sem delay nem checagem de humano.
+- **Causa raiz:** suposição no comentário do código ("fora do horário ninguém vai
+  responder mesmo") não é verdadeira na prática.
+- **Alterações realizadas:** unificado o envio — dentro ou fora do horário, a resposta
+  sempre passa por `scheduleDeferredReply`/`pending_bot_replies` (mesmo delay de 90s,
+  mesma checagem de humano ativo). Removidos os branches de envio imediato do fluxo
+  principal e do fluxo de lead-intake.
+- **Arquivos afetados:** `supabase/functions/agent-whatsapp/index.ts`.
+- **Validação executada:** `deno check` — 22 erros (caiu de 24, menos pontos de chamada).
+  Teste real via webhook confirmou `pending_bot_replies` criado com delay de 90s; código
+  não tem mais branch condicional pro caminho de envio, então o comportamento é
+  idêntico pros dois casos por construção. Deploy v44 verificado byte a byte. Dados de
+  teste removidos.
+- **Impactos e compatibilidade:** clientes que mandam mensagem fora do horário agora
+  esperam ~90s pela mensagem de "estamos fechados" em vez de recebê-la instantaneamente
+  — mudança de comportamento intencional, consistente com o pedido do usuário.
+- **Referência Git:** commit a ser criado nesta tarefa.
+
 ## 2026-08-14T13:57:00+00:00 — Corrige loop de confirmação travando o Tettolino
 
 - **Solicitação:** usuário mostrou print com o Tettolino respondendo "Não entendi.

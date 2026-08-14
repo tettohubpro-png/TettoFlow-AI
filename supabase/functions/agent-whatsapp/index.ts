@@ -314,25 +314,24 @@ Deno.serve(async (req) => {
       }
 
       // Mesmo delay de 90s do fluxo normal — lead novo também merece a
-      // chance da secretária/comercial responder pessoalmente antes da IA.
-      if (withinHours) {
-        const conversationId = await logConversation(supabase, client, payload, null, false)
-        if (conversationId) {
-          await scheduleDeferredReply(supabase, {
-            workspaceId: client.workspace_id,
-            conversationId,
-            clientId: client.id,
-            phone: payload.phone,
-            instance,
-            replyText: result.reply,
-          })
-        }
-        await sendEvolutionPresence(instance, payload.phone, 'paused')
-      } else {
-        const sentId = await sendEvolutionText(instance, payload.phone, result.reply)
-        await logConversation(supabase, client, payload, result.reply, false, sentId)
-        await sendEvolutionPresence(instance, payload.phone, 'paused')
+      // chance da secretária/comercial responder pessoalmente antes da IA,
+      // e isso vale INDEPENDENTE do horário comercial: a equipe às vezes
+      // responde cliente fora do horário configurado (comprovado em dados
+      // reais de produção), então mandar a mensagem de "estamos fechados"
+      // na hora, sem checar, podia atropelar uma resposta humana real que
+      // já estava rolando na mesma conversa.
+      const conversationId = await logConversation(supabase, client, payload, null, false)
+      if (conversationId) {
+        await scheduleDeferredReply(supabase, {
+          workspaceId: client.workspace_id,
+          conversationId,
+          clientId: client.id,
+          phone: payload.phone,
+          instance,
+          replyText: result.reply,
+        })
       }
+      await sendEvolutionPresence(instance, payload.phone, 'paused')
 
       return json({
         reply: result.reply,
@@ -342,7 +341,8 @@ Deno.serve(async (req) => {
         client_id: client.id,
         client_name: client.name,
         lead_intake: !result.done,
-        deferred: withinHours,
+        deferred: true,
+        within_hours: withinHours,
       })
     }
 
@@ -438,28 +438,24 @@ Deno.serve(async (req) => {
       null,
     )
 
-    // Dentro do horário comercial, a resposta da IA fica engatilhada 90s —
-    // dá tempo do social media responder o cliente pessoalmente antes.
-    // Fora do horário não faz sentido esperar (ninguém vai responder mesmo
-    // — reply já é a mensagem informativa de horário), manda na hora.
-    if (withinHours) {
-      const conversationId = await logConversation(supabase, client, payload, null, route.needsHuman)
-      if (conversationId) {
-        await scheduleDeferredReply(supabase, {
-          workspaceId: client.workspace_id,
-          conversationId,
-          clientId: client.id,
-          phone: payload.phone,
-          instance,
-          replyText: reply,
-        })
-      }
-      await sendEvolutionPresence(instance, payload.phone, 'paused')
-    } else {
-      const sentId = await sendEvolutionText(instance, payload.phone, reply)
-      await logConversation(supabase, client, payload, reply, route.needsHuman, sentId)
-      await sendEvolutionPresence(instance, payload.phone, 'paused')
+    // A resposta da IA sempre fica engatilhada 90s antes de sair, dentro OU
+    // fora do horário comercial — dá tempo de alguém da equipe responder o
+    // cliente pessoalmente antes. Achado real em produção: a equipe às
+    // vezes responde cliente fora do horário configurado, então mandar a
+    // mensagem de "estamos fechados" na hora (sem checar) podia atropelar
+    // uma resposta humana genuína que já estava rolando na mesma conversa.
+    const conversationId = await logConversation(supabase, client, payload, null, route.needsHuman)
+    if (conversationId) {
+      await scheduleDeferredReply(supabase, {
+        workspaceId: client.workspace_id,
+        conversationId,
+        clientId: client.id,
+        phone: payload.phone,
+        instance,
+        replyText: reply,
+      })
     }
+    await sendEvolutionPresence(instance, payload.phone, 'paused')
 
     if (shouldCreateOp) {
       await sendInternalAlert(instance, client.name, route.department, payload.message)
@@ -476,7 +472,8 @@ Deno.serve(async (req) => {
       operation_id: operationId,
       client_id: client.id,
       client_name: client.name,
-      deferred: withinHours,
+      deferred: true,
+      within_hours: withinHours,
     })
   } catch (err) {
     return json({ error: String(err) }, 500)

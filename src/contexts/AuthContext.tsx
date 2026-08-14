@@ -12,6 +12,7 @@ import { supabase } from '@/lib/supabase'
 import type { AppUser, Membership, MembershipRole, Workspace } from '@/types/database'
 import { normalizeLoginIdentifier, isEmployee } from '@/utils/permissions'
 import { punchOutUser } from '@/utils/punchClock'
+import { ComplianceLogger } from '@/services/complianceLogger'
 
 interface AuthContextValue {
   user: User | null
@@ -43,6 +44,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [workspace, setWorkspace] = useState<Workspace | null>(null)
   const [loading, setLoading] = useState(true)
   const [accessStatus, setAccessStatus] = useState<'pending' | 'blocked' | null>(null)
+  const complianceLogger = useMemo(() => new ComplianceLogger(supabase), [])
 
   const loadAppContext = useCallback(async (userId: string) => {
     setAccessStatus(null)
@@ -174,9 +176,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const signIn = useCallback(async (identifier: string, password: string) => {
     const email = normalizeLoginIdentifier(identifier)
-    const { error } = await supabase.auth.signInWithPassword({ email, password })
+    const { error, data } = await supabase.auth.signInWithPassword({ email, password })
+
+    if (!error && data.user) {
+      try {
+        // Log login bem-sucedido (role será confirmado depois em loadAppContext)
+        await complianceLogger.logLogin(data.user.id, 'pending')
+      } catch (logErr) {
+        console.warn('Erro ao logar login:', logErr)
+      }
+    }
+
     return { error: error?.message ?? null }
-  }, [])
+  }, [complianceLogger])
 
   const signInWithGoogle = useCallback(async () => {
     const { error } = await supabase.auth.signInWithOAuth({
@@ -200,11 +212,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         /* ignore punch-out errors on logout */
       }
     }
+
+    if (user?.id) {
+      try {
+        // Log logout
+        await complianceLogger.logLogout(user.id, membership?.role ?? 'unknown')
+      } catch (logErr) {
+        console.warn('Erro ao logar logout:', logErr)
+      }
+    }
+
     await supabase.auth.signOut()
     setAppUser(null)
     setMembership(null)
     setWorkspace(null)
-  }, [membership?.role, membership?.workspace_id, user?.id])
+  }, [membership?.role, membership?.workspace_id, user?.id, complianceLogger])
 
   const resetPassword = useCallback(async (email: string) => {
     const { error } = await supabase.auth.resetPasswordForEmail(normalizeLoginIdentifier(email), {
@@ -269,6 +291,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       resetPassword,
       updatePassword,
       clearMustChangePassword,
+      complianceLogger,
     ],
   )
 

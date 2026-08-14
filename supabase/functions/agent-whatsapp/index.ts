@@ -37,6 +37,19 @@ const INTERNAL_GROUP_JIDS = new Set([
   '120363425335706554@g.us', // Edição de Vídeo - Marcos
 ])
 
+// Grupo do cliente Vagner Filho — quando ele manda foto + nome de alguém
+// nesse grupo, é sempre pedido de nota de pesar (ver
+// handleVagnerFilhoNotaDePesar). Automação específica desse cliente, não é
+// um padrão genérico ainda.
+const VAGNER_FILHO_GROUP_JID = '120363422935780174@g.us'
+
+// Modelo base no Canva pra nota de pesar (design comum, não é modelo de
+// marca — a conta do cliente não é Enterprise, então não dá pra usar a API
+// de autofill do Canva; a troca de nome/foto ainda é manual). Ver
+// createCanvaNotaPesarCopy.
+const CANVA_NOTA_PESAR_TEMPLATE_ID = 'DAHEfULV-PE'
+const CANVA_NOTA_PESAR_TEMPLATE_LINK = 'https://canva.link/jnuapj6czise6lp'
+
 // Roteiro de vendas pro agente conversar com LEADS (números ainda não cadastrados
 // como cliente). PLACEHOLDER — Mairo vai trocar por conteúdo real (diferenciais,
 // cases, prioridade de serviço). Até lá, mantém regras seguras: nunca cita preço
@@ -198,6 +211,7 @@ interface Payload {
   isGroup?: boolean
   groupJid?: string
   mentionedPhones?: string[]
+  hasImage?: boolean
 }
 
 type NormalizeResult =
@@ -521,6 +535,7 @@ async function normalizePayload(raw: unknown): Promise<NormalizeResult> {
     if (!phone) return { kind: 'skip' }
 
     const msg = (data.message ?? {}) as Record<string, unknown>
+    const hasImage = !!msg.imageMessage
     let text =
       (msg.conversation as string | undefined) ??
       ((msg.extendedTextMessage as Record<string, unknown> | undefined)?.text as string | undefined) ??
@@ -531,7 +546,11 @@ async function normalizePayload(raw: unknown): Promise<NormalizeResult> {
       text = await transcribeAudio(body.instance as string | undefined, key.id)
     }
 
-    if (!text?.trim()) return { kind: 'skip' } // tipo não suportado (figurinha, reação, etc.)
+    // Imagem sem legenda em GRUPO ainda é uma mensagem válida (ex: foto pra
+    // nota de pesar, sem texto junto) — deixa passar só nesse caso. No 1:1
+    // com cliente mantém o comportamento antigo (skip), pra não arriscar
+    // mandar mensagem vazia pro Groq/lead-intake sem necessidade.
+    if (!text?.trim() && !(hasImage && isGroup)) return { kind: 'skip' }
 
     if (key.fromMe) {
       // Mensagem SAÍDA da conta da agência — pode ser eco da nossa própria
@@ -541,7 +560,7 @@ async function normalizePayload(raw: unknown): Promise<NormalizeResult> {
       return {
         kind: 'from_me',
         phone,
-        message: text.trim(),
+        message: (text ?? '').trim(),
         messageId: key.id,
         isGroup,
       }
@@ -551,11 +570,12 @@ async function normalizePayload(raw: unknown): Promise<NormalizeResult> {
       kind: 'payload',
       payload: {
         phone,
-        message: text.trim(),
+        message: (text ?? '').trim(),
         contact_name: data.pushName as string | undefined,
         instance: body.instance as string | undefined,
         isGroup,
         groupJid: isGroup ? remoteJid : undefined,
+        hasImage,
         mentionedPhones: isGroup ? extractMentionedPhones(msg) : undefined,
       },
     }
@@ -795,6 +815,14 @@ async function handleGroupMessage(
     const operator = await resolveOperator(supabase, payload.phone)
     if (operator) return
 
+    // Grupo do Vagner Filho + foto com nome junto = pedido de nota de pesar.
+    // Trata automaticamente (cria tarefa + avisa o designer) em vez de só
+    // avisar o dono como os outros grupos de cliente.
+    if (payload.groupJid === VAGNER_FILHO_GROUP_JID && payload.hasImage && payload.message.trim()) {
+      const handled = await handleVagnerFilhoNotaDePesar(supabase, payload, instance)
+      if (handled) return
+    }
+
     const ownerPhone = await getOwnerWhatsappPhone(supabase)
     if (!ownerPhone) return
 
@@ -861,6 +889,148 @@ async function getOwnerWhatsappPhone(supabase: ReturnType<typeof createClient>):
     .eq('id', OWNER_RESTRICTED_USER_ID)
     .maybeSingle()
   return (data?.whatsapp_phone as string | undefined) ?? null
+}
+
+/**
+ * Pedido de nota de pesar do cliente Vagner Filho: ele manda a foto + nome
+ * da pessoa no grupo, e alguém da equipe (design) precisa criar a arte no
+ * Canva a partir do modelo-base e postar no Stories.
+ *
+ * O que essa função automatiza hoje: cria a tarefa no CRM (com o nome e o
+ * aviso pra conferir a foto no grupo) e avisa quem for responsável por
+ * WhatsApp. Retorna true se conseguiu tratar (pra handleGroupMessage não
+ * cair também no aviso genérico de "mensagem em grupo" pro dono).
+ *
+ * A geração automática da cópia no Canva (createCanvaNotaPesarCopy) só
+ * funciona quando as credenciais da integração Canva estiverem
+ * configuradas — até lá, a tarefa aponta pro link do modelo-base pra
+ * duplicar manualmente.
+ */
+async function handleVagnerFilhoNotaDePesar(
+  supabase: ReturnType<typeof createClient>,
+  payload: Payload,
+  instance: string | undefined,
+): Promise<boolean> {
+  try {
+    const workspaceId = await getDefaultWorkspaceId(supabase)
+    if (!workspaceId) return false
+
+    const personName = payload.message.trim().slice(0, 200)
+
+    const canvaCopy = await createCanvaNotaPesarCopy(personName)
+
+    const description = canvaCopy
+      ? `Cliente: Vagner Filho (grupo Marketing ADV Vagner Filho).\nNome: ${personName}\nCópia já criada no Canva: ${canvaCopy.url}\nFoto: confira a imagem mandada no grupo.\nTroque nome/foto no Canva e publique no Stories.`
+      : `Cliente: Vagner Filho (grupo Marketing ADV Vagner Filho).\nNome: ${personName}\nFoto: confira a imagem mandada no grupo.\nModelo-base pra duplicar manualmente: ${CANVA_NOTA_PESAR_TEMPLATE_LINK}\n(Cópia automática no Canva ainda não configurada.)`
+
+    const assigneeId = await resolveDepartmentAssignee(supabase, workspaceId, 'design')
+
+    const { data: task, error } = await supabase
+      .from('tasks')
+      .insert({
+        workspace_id: workspaceId,
+        title: `[Nota de Pesar] ${personName}`,
+        description,
+        priority: 'HIGH',
+        assignee_id: assigneeId,
+        created_by: null,
+      })
+      .select('id, title')
+      .maybeSingle()
+
+    if (error) {
+      console.error('handleVagnerFilhoNotaDePesar: falha ao criar tarefa', error)
+      return false
+    }
+
+    if (assigneeId) {
+      const { data: assigneeUser } = await supabase
+        .from('users')
+        .select('whatsapp_phone')
+        .eq('id', assigneeId)
+        .maybeSingle()
+      const assigneePhone = assigneeUser?.whatsapp_phone as string | undefined
+      if (assigneePhone) {
+        const notifyText = canvaCopy
+          ? `📋 Nova nota de pesar — ${personName}\nJá criei a cópia no Canva: ${canvaCopy.url}\nSó falta trocar nome/foto e postar no Stories. Foto tá no grupo do Vagner Filho.`
+          : `📋 Nova nota de pesar — ${personName}\nUse o modelo: ${CANVA_NOTA_PESAR_TEMPLATE_LINK}\nFoto tá no grupo do Vagner Filho.`
+        await sendEvolutionText(instance, assigneePhone, notifyText)
+      }
+    }
+
+    console.log(`[handleVagnerFilhoNotaDePesar] tarefa criada: ${task?.id} — ${task?.title}`)
+    return true
+  } catch (err) {
+    console.error('handleVagnerFilhoNotaDePesar failed', err)
+    return false
+  }
+}
+
+/**
+ * Cria uma cópia renomeada do modelo-base de nota de pesar via Canva Connect
+ * API. Requer CANVA_CLIENT_ID/CANVA_CLIENT_SECRET/CANVA_REFRESH_TOKEN
+ * configurados (integração OAuth ainda não configurada em produção — ver
+ * conversa sobre a integração do Canva). Retorna null (sem erro) quando as
+ * credenciais não estão presentes, pra não travar a criação da tarefa.
+ *
+ * NÃO troca nome/foto dentro do design automaticamente — isso exige a API
+ * de autofill do Canva, que só funciona em contas Enterprise. Só cria a
+ * cópia já renomeada, pronta pra edição manual.
+ */
+async function createCanvaNotaPesarCopy(personName: string): Promise<{ id: string; url: string } | null> {
+  const clientId = Deno.env.get('CANVA_CLIENT_ID')
+  const clientSecret = Deno.env.get('CANVA_CLIENT_SECRET')
+  const refreshToken = Deno.env.get('CANVA_REFRESH_TOKEN')
+  if (!clientId || !clientSecret || !refreshToken) return null
+
+  try {
+    const tokenRes = await fetchWithTimeout(
+      'https://api.canva.com/rest/v1/oauth/token',
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+          Authorization: `Basic ${btoa(`${clientId}:${clientSecret}`)}`,
+        },
+        body: new URLSearchParams({ grant_type: 'refresh_token', refresh_token: refreshToken }),
+      },
+      10000,
+    )
+    const tokenBody = await tokenRes.json()
+    const accessToken = tokenBody?.access_token
+    if (!accessToken) {
+      console.error('createCanvaNotaPesarCopy: falha ao renovar token', tokenBody)
+      return null
+    }
+
+    const designRes = await fetchWithTimeout(
+      'https://api.canva.com/rest/v1/designs',
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          type: 'design',
+          design_id: CANVA_NOTA_PESAR_TEMPLATE_ID,
+          title: `Vagner Filho - Nota de Pesar - ${personName}`.slice(0, 255),
+        }),
+      },
+      10000,
+    )
+    const designBody = await designRes.json()
+    const id = designBody?.design?.id
+    const url = designBody?.design?.urls?.edit_url
+    if (!id || !url) {
+      console.error('createCanvaNotaPesarCopy: resposta inesperada', designBody)
+      return null
+    }
+    return { id, url }
+  } catch (err) {
+    console.error('createCanvaNotaPesarCopy failed', err)
+    return null
+  }
 }
 
 /**

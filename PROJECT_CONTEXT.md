@@ -63,7 +63,7 @@ equipe.
 | Componente | Local | Responsabilidade |
 | --- | --- | --- |
 | Frontend (CRM) | `src/` | React 19 + Vite + TS + Tailwind 4. SPA autenticada via Supabase Auth. |
-| `agent-whatsapp` | `supabase/functions/agent-whatsapp/index.ts` (~3200 linhas) | **Função central** — webhook único da Evolution API. Atende cliente, roda o Tettolino (equipe), monitora grupos, detecta resposta manual humana (`fromMe`), agenda respostas com delay. |
+| `agent-whatsapp` | `supabase/functions/agent-whatsapp/index.ts` (~3440 linhas) | **Função central** — webhook único da Evolution API. Atende cliente, roda o Tettolino (equipe), monitora grupos, detecta resposta manual humana (`fromMe`), agenda respostas com delay. |
 | `flush-pending-replies` | `supabase/functions/flush-pending-replies/` | Cron a cada 30s — envia (ou cancela) as respostas que `agent-whatsapp` deixou agendadas em `pending_bot_replies`. |
 | `manage-team` | `supabase/functions/manage-team/` | CRUD de membros da equipe (papel, telefone, job_role) chamado pela UI. |
 | `drive-upload` | `supabase/functions/drive-upload/` | Upload de arquivo pro Google Drive via service account. |
@@ -246,7 +246,7 @@ full-text (accent-insensitive), automação parcial de nota de pesar.
   seja multi-tenant (`workspace_id` em quase toda tabela).
 - Toda tabela de negócio tem RLS habilitado; a maioria segue o padrão "workspace lê,
   MANAGER+ escreve" (`has_workspace_role`).
-- Deploy de `agent-whatsapp` (arquivo grande, ~3200 linhas) só é considerado concluído após
+- Deploy de `agent-whatsapp` (arquivo grande, ~3440 linhas) só é considerado concluído após
   verificação byte a byte (diff + md5sum) entre o arquivo local e o que foi de fato
   implantado — ver `PROJECT_LESSONS.md` LES-0001.
 

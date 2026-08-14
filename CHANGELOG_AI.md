@@ -5,6 +5,72 @@
 > deploys verificados, testes reais). Antes disso, ver "Linha de base histórica" ao final —
 > reconstruída a partir do `git log`, sem acesso a decisões não documentadas em commit.
 
+## 2026-08-14T20:30:00+00:00 — Corrige fotos sem legenda descartadas + resposta quebrando com múltiplas imagens (v46, v47)
+
+- **Solicitação:** dono precisava urgentemente mandar 2 imagens reais pra um cliente;
+  reportou que o Tettolino negava ter recebido imagem mesmo com a feature v45 já no ar.
+- **Investigação:** confirmado nos logs que as mensagens de imagem chegavam (~100ms de
+  execução, rápido demais pra terem passado pelo LLM) mas eram descartadas — causa raiz:
+  `normalizePayload` só deixava passar imagem sem legenda em GRUPO, não no 1:1 com
+  operador; WhatsApp manda várias fotos selecionadas juntas como mensagens separadas,
+  a legenda chega numa mensagem de texto puro depois.
+- **Ação imediata (enquanto corrigia):** orientado o dono a usar o encaminhar nativo do
+  WhatsApp pras 2 imagens urgentes, sem depender do Tettolino.
+- **Alterações realizadas:** tabela `operator_pending_media` — foto sem legenda vira
+  "mídia pendente" (fila), confirmada rápido sem LLM; próxima mensagem de texto busca as
+  fotos pendentes dos últimos 5min (`resolveOperatorMediaContext`) e as anexa ao
+  `send_message`. `normalizePayload` deixa passar imagem sem legenda em qualquer
+  contexto (grupo ou 1:1) — cliente 1:1 sem legenda ganha resposta genérica de
+  agradecimento pelo mesmo mecanismo de delay, em vez de rodar Groq com mensagem vazia.
+  Histórico enviesado do Tettolino (`hermes_messages`, 4 negações repetidas de imagem)
+  limpo manualmente. Testando essa correção (v46), achado um SEGUNDO bug: encaminhar 2+
+  imagens quebrava a resposta inteira sem cair em nenhum catch (busca sequencial, timeout
+  de 8s por imagem, somado); corrigido trocando o loop sequencial por `Promise.all` +
+  try/catch ao redor de todo o bloco (v47).
+- **Arquivos afetados:** `supabase/functions/agent-whatsapp/index.ts`,
+  `supabase/migrations/20260814200000_operator_pending_media.sql`.
+- **Validação executada:** `deno check` sem erro novo além do padrão conhecido. Testado
+  ponta a ponta 2x: antes da correção 2, 2 imagens + instrução quebrava com "Deu ruim";
+  depois, respondeu corretamente que as imagens falharam (IDs fictícios de propósito) sem
+  derrubar a resposta. Deploys v46 e v47 verificados byte a byte. Dados de teste e
+  entradas enviesadas do histórico removidos.
+- **Impactos e compatibilidade:** cliente 1:1 mandando imagem sem legenda agora recebe
+  uma resposta (antes era ignorado silenciosamente) — mudança de comportamento
+  intencional.
+- **Pendências/riscos:** o caminho de sucesso real (imagem de verdade sendo buscada e
+  enviada via Evolution API) não foi validado com mídia real nesta sessão — só testado
+  com IDs de mensagem fictícios (que corretamente falham e caem pra texto). Confirmar com
+  o usuário assim que ele testar com uma foto real.
+- **Referência Git:** commit a ser criado nesta tarefa.
+
+## 2026-08-14 — `send_message` do Tettolino passa a encaminhar imagem de verdade (v45)
+
+- **Solicitação:** dono da agência precisava mandar uma foto pro Tettolino com legenda
+  nomeando o destinatário e o bot encaminhar a IMAGEM de verdade via Evolution API, não
+  só o texto da legenda — caso de uso real: cliente esperando receber a foto.
+- **Alterações realizadas (já presentes no arquivo fonte antes desta tarefa, que cobriu
+  só deploy + verificação):** `fetchEvolutionMediaBase64` (baixa o base64 da mídia
+  recebida no webhook a partir do `messageId`, reaproveitando o mesmo endpoint de
+  `transcribeAudio`) e `sendEvolutionImage` (envia via `POST
+  /message/sendMedia/{instance}`). `executeWriteTool('send_message', ...)` passou a
+  aceitar um `mediaContext` opcional: se a mensagem que disparou o `send_message` veio
+  com imagem anexada (`payload.hasImage` / `imageMessageId`), baixa e reenvia a imagem
+  com a legenda; se falhar, cai para texto puro e sinaliza `image_forward_failed: true`
+  no resultado. `hermesSystemPrompt` (regra 3b) instrui o Tettolino a reportar
+  `image_forwarded`/`image_forward_failed` ao usuário. `runHermesAgentLoop` passa
+  `mediaContext` só para `send_message` (única ferramenta em
+  `HERMES_IMMEDIATE_WRITE_TOOLS`).
+- **Arquivos afetados:** `supabase/functions/agent-whatsapp/index.ts`.
+- **Validação executada (esta tarefa):** arquivo lido do disco por inteiro (3442
+  linhas), deployado verbatim via `deploy_edge_function`, e conferido byte a byte
+  contra o arquivo fonte via `get_edge_function` + `diff` + `md5sum` — MATCH na
+  primeira tentativa (`f5f2653cc74fe61d3ccaf5c8eecde545`). Nenhuma mudança de código
+  feita nesta tarefa — só deploy e verificação.
+- **Impactos e compatibilidade:** `send_message` continua owner-only e imediato (sem
+  confirmação sim/não), agora com encaminhamento de imagem quando aplicável. Sem
+  mudança de schema/banco.
+- **Referência Git:** nenhum commit criado nesta tarefa (só deploy de edge function).
+
 ## 2026-08-14T14:15:00+00:00 — Delay de 90s + checagem de humano passa a valer fora do horário comercial também
 
 - **Solicitação:** usuário reafirmou (sem print desta vez) que o fluxo de resposta

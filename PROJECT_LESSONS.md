@@ -20,6 +20,7 @@
 | LES-0010 | Ambiente da sessão vs caminho do usuário | Aprendizado | Prompt do usuário pode referenciar ambiente diferente (Windows) do real (Linux) — confirmar antes de agir | Vigente | 2026-08-14 |
 | LES-0011 | Tettolino — confirmação pendente | Erro | Ação pendente sem expiração travava TODAS as mensagens seguintes num loop de "não entendi" | Vigente | 2026-08-14 |
 | LES-0012 | Atendimento a cliente — fora do horário | Erro | Mensagem de "estamos fechados" ignorava delay/checagem de humano, atropelando resposta real da equipe fora do horário configurado | Vigente | 2026-08-14 |
+| LES-0013 | Tettolino — encaminhar imagem | Erro | Foto sem legenda pro operador era descartada silenciosamente (nunca chegava); busca+envio sequencial de várias imagens quebrava a resposta inteira sem cair no catch | Vigente | 2026-08-14 |
 
 ## Regras preventivas consolidadas
 
@@ -444,6 +445,62 @@
 - **Skills relacionadas:** SKL-0002
 - **Referências:** commit a ser criado nesta tarefa.
 - **Confiança:** Alta (evidência direta em dados reais de produção, não inferência)
+
+### LES-0013 — Foto sem legenda pro operador era descartada; envio sequencial de várias imagens quebrava a resposta
+- **Status:** Vigente
+- **Tipo:** Erro
+- **Severidade:** Crítica (bloqueava uma necessidade real e urgente do dono da agência)
+- **Área/módulo:** `agent-whatsapp` — `normalizePayload`, `handleHermesMessage`,
+  `executeWriteTool('send_message')`
+- **Primeira ocorrência:** 2026-08-14 (uso real — dono tentou mandar 2 fotos de vaga de
+  emprego pro cliente "AM Consultoria" e falhou 4 vezes seguidas)
+- **Última validação:** 2026-08-14, testado com sucesso após as duas correções
+- **Sintoma 1:** Tettolino respondia "não consigo enviar imagens/não recebi nenhuma
+  imagem" pra TODO pedido de encaminhar foto, mesmo depois de uma feature de
+  encaminhamento de imagem já estar implantada (v45).
+- **Causa raiz 1:** WhatsApp manda várias fotos selecionadas juntas como mensagens
+  SEPARADAS, a maioria (ou todas) sem legenda — só a legenda visual da UI parece estar
+  "junto" da foto, mas tecnicamente chega como mensagem de texto puro depois. O código só
+  deixava passar imagem sem legenda em GRUPO (`hasImage && isGroup`); no 1:1 com o
+  operador, a foto sem legenda batia no `{kind:'skip'}` e nunca chegava nem a ser
+  processada — confirmado nos logs (chamadas de ~100ms, rápido demais pra terem passado
+  pelo LLM). Além disso, mesmo se a imagem chegasse, o modelo não tinha nenhum sinal
+  explícito de que uma imagem existia (só via na hora de chamar a ferramenta), e o
+  histórico de conversa (`hermes_messages`) já tinha 4 negações anteriores reforçando o
+  padrão errado (viés de few-shot, mesma classe do LES-0005).
+- **Solução aplicada 1:** `normalizePayload` deixa passar QUALQUER imagem (grupo ou 1:1)
+  mesmo sem legenda. Nova tabela `operator_pending_media`: foto sem legenda pro operador
+  vira uma "mídia pendente" (fila), confirmada com uma resposta rápida sem gastar chamada
+  de LLM; quando uma mensagem de texto puro chega depois, `resolveOperatorMediaContext`
+  busca as fotos pendentes dos últimos 5min e as anexa como contexto pro `send_message`.
+  Histórico enviesado (`hermes_messages`) limpo manualmente.
+- **Sintoma 2 (achado testando a correção 1):** com a fila de mídia funcionando, ao
+  tentar encaminhar 2 imagens de uma vez, a resposta inteira quebrava ("Deu ruim aqui do
+  meu lado processando seu pedido"), SEM cair em nenhum catch nem registrar nada em
+  `agent_actions_log` — indicando que a function morria no meio, provavelmente por tempo
+  de execução (busca de cada imagem tinha timeout de até 8s, em SÉRIE pra cada imagem,
+  somado à chamada da IA).
+- **Causa raiz 2:** loop sequencial (`for` com `await` dentro) pra buscar+mandar cada
+  imagem, sem proteção de try/catch ao redor do loop inteiro.
+- **Solução aplicada 2:** loop trocado por `Promise.all` (busca+envio de todas as imagens
+  em paralelo, não em série) e todo o bloco envolto em try/catch — qualquer falha aqui
+  agora cai pra texto puro em vez de derrubar a resposta inteira.
+- **Validação da solução:** testado com 2 mensagens de imagem sem legenda (message IDs
+  fictícios, propositalmente inválidos) seguidas de uma instrução de texto — antes da
+  correção 2, quebrava com "Deu ruim"; depois, respondeu corretamente "as imagens
+  falharam no envio" (esperado, já que os IDs eram fictícios) sem derrubar a resposta.
+  Deploy v46 (correção 1) e v47 (correção 2) verificados byte a byte.
+- **Regra preventiva:** (a) nunca assumir que "legenda + mídia" chegam sempre juntas no
+  mesmo evento de webhook — testar o caso de mídia separada da legenda. (b) qualquer loop
+  que faz I/O externo (rede) por item de uma lista deve rodar em paralelo
+  (`Promise.all`) quando a ordem não importa, e sempre envolto em try/catch — não deixar
+  uma falha de rede em UM item derrubar a operação inteira sem fallback.
+- **Quando esta regra se aplica:** qualquer feature nova envolvendo mídia do WhatsApp
+  (recebimento ou envio), e qualquer loop com chamadas de rede por item.
+- **Skills relacionadas:** SKL-0002, SKL-0004
+- **Referências:** commit a ser criado nesta tarefa; migration
+  `20260814200000_operator_pending_media.sql`.
+- **Confiança:** Alta (reproduzido, corrigido e revalidado em produção)
 
 ## Registro rápido durante a tarefa
 

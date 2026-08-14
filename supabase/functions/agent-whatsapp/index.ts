@@ -212,6 +212,7 @@ interface Payload {
   groupJid?: string
   mentionedPhones?: string[]
   hasImage?: boolean
+  imageMessageId?: string
 }
 
 type NormalizeResult =
@@ -297,6 +298,35 @@ Deno.serve(async (req) => {
           create_operation: false,
         })
       }
+    }
+
+    // Imagem sem nenhum texto junto (cliente mandou só a foto, sem legenda) —
+    // não dá pra rotear por intenção nem gerar resposta com Groq sem
+    // conteúdo. Confirma o recebimento de forma simples, pelo mesmo
+    // mecanismo de delay/checagem de humano dos outros casos.
+    if (payload.hasImage && !payload.message.trim()) {
+      const ackReply = 'Recebemos sua imagem! 📷 Se quiser me contar mais sobre o que precisa, é só mandar uma mensagem.'
+      const conversationId = await logConversation(supabase, client, payload, null, false)
+      if (conversationId) {
+        await scheduleDeferredReply(supabase, {
+          workspaceId: client.workspace_id,
+          conversationId,
+          clientId: client.id,
+          phone: payload.phone,
+          instance,
+          replyText: ackReply,
+        })
+      }
+      await sendEvolutionPresence(instance, payload.phone, 'paused')
+      return json({
+        reply: ackReply,
+        department: 'general',
+        handoff: false,
+        create_operation: false,
+        client_id: client.id,
+        client_name: client.name,
+        deferred: true,
+      })
     }
 
     // Lead ainda em qualificação (cliente criado pelo agente, INACTIVE, faltando
@@ -543,11 +573,12 @@ async function normalizePayload(raw: unknown): Promise<NormalizeResult> {
       text = await transcribeAudio(body.instance as string | undefined, key.id)
     }
 
-    // Imagem sem legenda em GRUPO ainda é uma mensagem válida (ex: foto pra
-    // nota de pesar, sem texto junto) — deixa passar só nesse caso. No 1:1
-    // com cliente mantém o comportamento antigo (skip), pra não arriscar
-    // mandar mensagem vazia pro Groq/lead-intake sem necessidade.
-    if (!text?.trim() && !(hasImage && isGroup)) return { kind: 'skip' }
+    // Imagem sem legenda é uma mensagem válida (grupo: ex. foto pra nota de
+    // pesar; 1:1: operador mandando foto pra encaminhar, com a instrução
+    // vindo numa mensagem separada logo depois — ver operator_pending_media
+    // em handleHermesMessage). Só pula mesmo quando não tem nem texto nem
+    // imagem (figurinha, reação, outros tipos não suportados).
+    if (!text?.trim() && !hasImage) return { kind: 'skip' }
 
     if (key.fromMe) {
       // Mensagem SAÍDA da conta da agência — pode ser eco da nossa própria
@@ -573,6 +604,7 @@ async function normalizePayload(raw: unknown): Promise<NormalizeResult> {
         isGroup,
         groupJid: isGroup ? remoteJid : undefined,
         hasImage,
+        imageMessageId: hasImage ? key.id : undefined,
         mentionedPhones: isGroup ? extractMentionedPhones(msg) : undefined,
       },
     }
@@ -1292,14 +1324,18 @@ const HERMES_TOOLS = [
   {
     name: 'send_message',
     description:
-      'ESCRITA — AÇÃO RESTRITA. Envia uma mensagem de WhatsApp em nome da agência (pelo número oficial) pra um funcionário da equipe, pra um cliente, ou pra um número direto. Informe exatamente UM entre to_team_member_name, to_client_name ou to_phone. Só o dono da agência pode aprovar essa ação; se qualquer outra pessoa pedir, recuse educadamente e diga que só o dono pode autorizar isso.',
+      'ESCRITA — AÇÃO RESTRITA. Envia uma mensagem de WhatsApp em nome da agência (pelo número oficial) pra um funcionário da equipe, pra um cliente, ou pra um número direto. Informe exatamente UM entre to_team_member_name, to_client_name ou to_phone. Se a mensagem que a pessoa te mandou (com o pedido de envio) veio com uma imagem anexada, essa imagem é encaminhada automaticamente junto do texto — não precisa fazer nada especial pra isso, só chame a ferramenta normalmente. Só o dono da agência pode aprovar essa ação; se qualquer outra pessoa pedir, recuse educadamente e diga que só o dono pode autorizar isso.',
     input_schema: {
       type: 'object',
       properties: {
         to_team_member_name: { type: 'string', description: 'Nome do funcionário/membro da equipe.' },
         to_client_name: { type: 'string', description: 'Nome do cliente (usa o contato principal cadastrado).' },
         to_phone: { type: 'string', description: 'Número direto (com DDI), se não for time nem cliente cadastrado.' },
-        message: { type: 'string', description: 'Texto da mensagem a enviar.' },
+        message: {
+          type: 'string',
+          description:
+            'Texto da mensagem a enviar. Se a mensagem original tinha uma imagem anexada, use aqui a legenda/texto que deve acompanhar a imagem.',
+        },
       },
       required: ['message'],
     },
@@ -1429,7 +1465,7 @@ Regras:
 1. Para qualquer pedido envolvendo um cliente específico, use search_clients primeiro se você não tiver o client_id — nunca invente um ID. Antes de usar create_client, sempre rode search_clients pelo nome primeiro: se já existir algo parecido, use update_client nesse cliente em vez de criar outro (o sistema também bloqueia duplicata por telefone/nome como segurança extra, mas não confie só nisso). Da mesma forma, se perguntarem sobre uma PESSOA e não estiver claro se é cliente ou equipe, use search_team primeiro (ou os dois, search_clients e search_team) antes de dizer "não encontrei" — nunca responda que não achou alguém sem ter buscado.
 2. Ferramentas de LEITURA (search_clients, get_client_summary, search_team, search_knowledge, check_messages) você pode chamar livremente para reunir contexto.
 3. Ferramentas de ESCRITA (create_client, update_client, create_task, update_task_status, assign_task, create_operation, update_operation_status, add_operation_comment, delete_client) NUNCA são executadas na hora — ao chamar uma delas, o sistema registra a ação como pendente e te avisa. NUNCA pergunte "confirma?" em texto solto por conta própria, sem ter chamado a ferramenta — isso não registra nada e trava o fluxo. O jeito certo é: chame a ferramenta primeiro; o tool_result vai te avisar que está pendente; SÓ AÍ você escreve a pergunta de confirmação pro usuário, em uma frase, descrevendo o que vai mudar e terminando com algo como "Confirma? Responda *sim* ou *não*."
-3b. send_message é DIFERENTE de todas as outras ferramentas de escrita e NÃO segue a regra 3: chame a ferramenta send_message IMEDIATAMENTE, na mesma resposta em que decidir enviar, sem perguntar "confirma?" antes nem depois — o resultado do tool_result já confirma que foi enviado, então só informe isso em uma frase curta ("Pronto! Mandei pra fulano."). NUNCA pergunte "Confirma? Responda sim ou não" pra send_message — mesmo que o histórico da conversa abaixo mostre você tendo perguntado isso antes, esse comportamento mudou: agora é sempre direto, sem exceção.
+3b. send_message é DIFERENTE de todas as outras ferramentas de escrita e NÃO segue a regra 3: chame a ferramenta send_message IMEDIATAMENTE, na mesma resposta em que decidir enviar, sem perguntar "confirma?" antes nem depois — o resultado do tool_result já confirma que foi enviado, então só informe isso em uma frase curta ("Pronto! Mandei pra fulano."). NUNCA pergunte "Confirma? Responda sim ou não" pra send_message — mesmo que o histórico da conversa abaixo mostre você tendo perguntado isso antes, esse comportamento mudou: agora é sempre direto, sem exceção. Imagens são encaminhadas automaticamente quando existem — tanto se a mensagem atual veio com foto+legenda, quanto se a pessoa mandou foto(s) sem legenda ANTES e só agora te disse pra quem mandar (você não precisa fazer nada especial pra isso, o sistema já junta sozinho — nunca diga "não recebi imagem" sem antes tentar chamar send_message, porque a imagem pode ter chegado numa mensagem anterior). Olhe o campo "image_forwarded"/"images_forwarded_count" no resultado: se vier true, diga que mandou a(s) imagem(ns) ("Pronto! Mandei a imagem pra fulano." ou "Mandei as 2 imagens pra fulano."); se vier "image_forward_failed": true, avise que só o texto foi (a imagem falhou) e peça pra tentar reenviar a imagem.
 4. Chame no máximo UMA ferramenta de escrita por mensagem do usuário. Se o pedido envolve vários itens da MESMA ação (ex: apagar vários clientes de uma vez), isso ainda conta como uma chamada só — use uma ferramenta que aceite lista (como delete_client) em vez de chamar várias vezes.
 5. Respostas curtas e diretas — 1 a 3 frases, no máximo. Nada de parágrafo explicando contexto óbvio ou listando tudo que você fez passo a passo. Está no WhatsApp, não é um relatório. Só entra em mais detalhe se o usuário pedir explicitamente.
 6. Se não entender o pedido ou faltar informação (ex: qual cliente, qual tarefa), pergunte antes de agir — em uma frase curta.
@@ -1821,6 +1857,7 @@ async function executeWriteTool(
   actorId: string,
   toolName: string,
   input: Record<string, unknown>,
+  mediaContext?: { messageId: string; instance: string | undefined }[],
 ): Promise<unknown> {
   // Segunda camada de checagem pras ferramentas restritas ao dono — a
   // primeira já bloqueia antes de sequer registrar como pending
@@ -1913,7 +1950,50 @@ async function executeWriteTool(
         throw new Error('Informe to_team_member_name, to_client_name ou to_phone.')
       }
 
-      const sentMessageId = await sendEvolutionText(undefined, targetPhone, message)
+      // Se a mensagem (ou fotos pendentes recentes, ver
+      // resolveOperatorMediaContext) do operador que disparou esse
+      // send_message veio com imagem(ns), encaminha a(s) imagem(ns) de
+      // verdade em vez de só o texto — baixa o base64 de cada uma e reenvia
+      // pro destino (legenda só na primeira, as outras vão só a imagem, pra
+      // não repetir o mesmo texto várias vezes). Se nenhuma imagem for
+      // encaminhada com sucesso, cai pra texto puro (melhor mandar o texto
+      // do que não mandar nada) e avisa no resultado.
+      let sentMessageId: string | null = null
+      let imagesForwarded = 0
+      let imagesFailed = 0
+      if (mediaContext && mediaContext.length > 0) {
+        // Em paralelo (não sequencial) — cada busca de mídia pode levar até
+        // uns segundos, e com 2+ imagens em série o tempo somado arriscava
+        // estourar o tempo de execução da function inteira (bug real visto
+        // em teste: função "morria" no meio sem nem cair no catch). Tudo
+        // protegido por try/catch pra NUNCA deixar uma falha aqui derrubar
+        // a resposta inteira do Tettolino — pior caso, cai pra texto puro.
+        try {
+          const results = await Promise.all(
+            mediaContext.map(async (item, i) => {
+              const base64 = await fetchEvolutionMediaBase64(item.instance, item.messageId)
+              if (!base64) return null
+              return sendEvolutionImage(item.instance, targetPhone, base64, i === 0 ? message : '')
+            }),
+          )
+          for (let i = 0; i < results.length; i++) {
+            if (results[i]) {
+              imagesForwarded++
+              if (i === 0) sentMessageId = results[i]
+            } else {
+              imagesFailed++
+            }
+          }
+        } catch (err) {
+          console.error('send_message: falha encaminhando imagem(ns)', err)
+          imagesFailed = mediaContext.length
+        }
+      }
+      const imageForwarded = imagesForwarded > 0
+      const imageForwardFailed = imagesFailed > 0
+      if (!imageForwarded) {
+        sentMessageId = await sendEvolutionText(undefined, targetPhone, message)
+      }
 
       // Se foi pra um cliente, também registra na thread do Inbox (mesma
       // lógica de logConversation) pra aparecer na tela de Mensagens do CRM.
@@ -1975,7 +2055,13 @@ async function executeWriteTool(
         )
       }
 
-      return { sent: true, to: targetLabel }
+      return {
+        sent: true,
+        to: targetLabel,
+        image_forwarded: imageForwarded,
+        images_forwarded_count: imagesForwarded,
+        image_forward_failed: imageForwardFailed,
+      }
     }
 
     case 'create_client': {
@@ -2313,6 +2399,7 @@ async function runHermesAgentLoop(
   actorPhone: string,
   userMessage: string,
   history: Array<{ role: 'user' | 'assistant'; content: string }>,
+  mediaContext?: { messageId: string; instance: string | undefined }[],
 ): Promise<string> {
   const messages: Array<Record<string, unknown>> = [
     ...history.map((h) => ({ role: h.role, content: h.content })),
@@ -2375,7 +2462,14 @@ async function runHermesAgentLoop(
         // confirmação — já é owner-only (checado acima), então só ele
         // consegue disparar isso de qualquer forma.
         try {
-          const result = await executeWriteTool(supabase, workspaceId, operator.id, block.name, block.input)
+          const result = await executeWriteTool(
+            supabase,
+            workspaceId,
+            operator.id,
+            block.name,
+            block.input,
+            block.name === 'send_message' ? mediaContext : undefined,
+          )
           await logAgentAction(supabase, {
             workspaceId,
             actorUserId: operator.id,
@@ -2475,6 +2569,46 @@ async function runHermesAgentLoop(
   return 'Desculpa, não consegui concluir isso agora. Pode tentar de novo, de um jeito mais direto?'
 }
 
+const PENDING_MEDIA_WINDOW_MS = 5 * 60 * 1000
+
+/**
+ * Decide quais imagens vão junto do próximo send_message que o Tettolino
+ * chamar: se a mensagem ATUAL já veio com foto+legenda, usa só essa. Senão,
+ * busca fotos que ficaram pendentes (mandadas sem legenda nos últimos 5min)
+ * e as consome (apaga do banco) — a instrução de texto que chegou agora é
+ * o "pra quem mandar" delas.
+ */
+async function resolveOperatorMediaContext(
+  supabase: ReturnType<typeof createClient>,
+  operatorId: string,
+  payload: Payload,
+  instance: string | undefined,
+): Promise<{ messageId: string; instance: string | undefined }[] | undefined> {
+  if (payload.hasImage && payload.imageMessageId) {
+    return [{ messageId: payload.imageMessageId, instance }]
+  }
+
+  const since = new Date(Date.now() - PENDING_MEDIA_WINDOW_MS).toISOString()
+  const { data: pendingMedia } = await supabase
+    .from('operator_pending_media')
+    .select('id, message_id, instance')
+    .eq('user_id', operatorId)
+    .gt('received_at', since)
+    .order('received_at', { ascending: true })
+
+  if (!pendingMedia || pendingMedia.length === 0) return undefined
+
+  await supabase
+    .from('operator_pending_media')
+    .delete()
+    .in('id', pendingMedia.map((m) => m.id as string))
+
+  return pendingMedia.map((m) => ({
+    messageId: m.message_id as string,
+    instance: (m.instance as string | undefined) ?? instance,
+  }))
+}
+
 async function handleHermesMessage(
   supabase: ReturnType<typeof createClient>,
   operator: { id: string; name: string; email: string },
@@ -2500,6 +2634,29 @@ async function handleHermesMessage(
     .order('requested_at', { ascending: false })
     .limit(1)
     .maybeSingle()
+
+  // Foto sem legenda: WhatsApp costuma mandar várias fotos selecionadas
+  // juntas como mensagens SEPARADAS, cada uma sem legenda — a instrução
+  // ("manda pra fulano") vem depois, numa mensagem de texto puro. Guarda a
+  // foto como "mídia pendente" e confirma o recebimento sem gastar uma
+  // chamada de LLM (rápido, sem ambiguidade) — a instrução seguinte busca
+  // essas fotos de volta em resolveOperatorMediaContext.
+  if (payload.hasImage && !payload.message.trim() && payload.imageMessageId) {
+    await supabase.from('operator_pending_media').insert({
+      user_id: operator.id,
+      message_id: payload.imageMessageId,
+      instance: instance ?? null,
+    })
+    const ackReply =
+      '📷 Recebi! Me diz o que fazer com ela (pra quem mandar) — se tiver mais fotos, pode mandar todas antes de me dizer o destino.'
+    await sendEvolutionText(instance, payload.phone, ackReply)
+    await persistHermesTurn(supabase, workspaceId, operator.id, '[imagem]', ackReply)
+    await upsertInternalConversation(supabase, workspaceId, payload.phone, operator.name, 'internal', [
+      { direction: 'inbound', content: '[imagem]', isAi: false },
+      { direction: 'outbound', content: ackReply, isAi: true },
+    ])
+    return { reply: ackReply, hermes: true, actor_user_id: operator.id, media_queued: true }
+  }
 
   const apiKey = Deno.env.get('ANTHROPIC_API_KEY')
 
@@ -2530,6 +2687,7 @@ async function handleHermesMessage(
   } else {
     try {
       const history = await loadRecentHermesMessages(supabase, workspaceId, operator.id)
+      const mediaContext = await resolveOperatorMediaContext(supabase, operator.id, payload, instance)
       reply = await runHermesAgentLoop(
         supabase,
         apiKey,
@@ -2538,6 +2696,7 @@ async function handleHermesMessage(
         payload.phone,
         payload.message,
         history,
+        mediaContext,
       )
     } catch (err) {
       console.error('runHermesAgentLoop failed', err)
@@ -3267,6 +3426,64 @@ async function sendEvolutionText(
     return typeof id === 'string' ? id : null
   } catch (err) {
     console.error('sendEvolutionText failed', err)
+    return null
+  }
+}
+
+/**
+ * Baixa o base64 de uma mídia (imagem, áudio, etc.) recebida pelo webhook, a
+ * partir do messageId — mesmo endpoint já usado em transcribeAudio pra
+ * áudio. Necessário porque o WhatsApp/Baileys manda a mídia criptografada
+ * no webhook; a Evolution API decripta e devolve em base64 sob pedido.
+ */
+async function fetchEvolutionMediaBase64(
+  instance: string | undefined,
+  messageId: string,
+): Promise<string | null> {
+  const cfg = evolutionConfig(instance)
+  if (!cfg) return null
+  try {
+    const res = await fetchWithTimeout(`${cfg.base}/chat/getBase64FromMediaMessage/${cfg.inst}`, {
+      method: 'POST',
+      headers: { apikey: cfg.apiKey, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: { key: { id: messageId } } }),
+    })
+    const body = await res.json().catch(() => null)
+    const base64: string | undefined = body?.base64
+    return typeof base64 === 'string' ? base64 : null
+  } catch (err) {
+    console.error('fetchEvolutionMediaBase64 failed', err)
+    return null
+  }
+}
+
+/** Manda uma imagem (base64) pra um número via Evolution API. */
+async function sendEvolutionImage(
+  instance: string | undefined,
+  phone: string,
+  base64: string,
+  caption: string,
+): Promise<string | null> {
+  const cfg = evolutionConfig(instance)
+  if (!cfg) return null
+  try {
+    const res = await fetchWithTimeout(`${cfg.base}/message/sendMedia/${cfg.inst}`, {
+      method: 'POST',
+      headers: { apikey: cfg.apiKey, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        number: phone,
+        mediatype: 'image',
+        mimetype: 'image/jpeg',
+        media: base64,
+        caption,
+        fileName: 'imagem.jpg',
+      }),
+    })
+    const body = await res.json().catch(() => null)
+    const id = body?.key?.id
+    return typeof id === 'string' ? id : null
+  } catch (err) {
+    console.error('sendEvolutionImage failed', err)
     return null
   }
 }

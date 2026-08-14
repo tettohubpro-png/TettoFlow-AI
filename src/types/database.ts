@@ -382,6 +382,32 @@ export interface ClientAiMemory {
   updated_at: string
 }
 
+export type KnowledgeCategory =
+  | 'POLICY'
+  | 'PRICING'
+  | 'PROCEDURE'
+  | 'FAQ'
+  | 'SERVICE'
+  | 'BRAND'
+  | 'GENERAL'
+
+export type KnowledgeAudience = 'hermes' | 'clients' | 'both'
+
+export interface KnowledgeBaseEntry {
+  id: string
+  workspace_id: string
+  title: string
+  content: string
+  category: KnowledgeCategory
+  tags: string[]
+  audience: KnowledgeAudience
+  importance: number
+  active: boolean
+  created_by: string | null
+  created_at: string
+  updated_at: string
+}
+
 export interface AiChatMessage {
   role: 'user' | 'assistant'
   content: string

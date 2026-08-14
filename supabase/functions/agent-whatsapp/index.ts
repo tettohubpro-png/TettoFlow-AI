@@ -380,10 +380,12 @@ Deno.serve(async (req) => {
     if (!withinHours) {
       reply = OFF_HOURS_MESSAGE
     } else if (groqKey) {
+      const knowledge = await searchKnowledgeForClientBot(supabase, client.workspace_id, payload.message)
       reply = await generateWithGroq(groqKey, {
         clientName: client.name,
         message: payload.message,
         memories: memories ?? [],
+        knowledge,
         department: route.department,
         departmentLabel: DEPARTMENT_LABELS[route.department],
         greeting,
@@ -1024,6 +1026,18 @@ const HERMES_TOOLS = [
     },
   },
   {
+    name: 'search_knowledge',
+    description:
+      'LEITURA. Busca na base de conhecimento da agência (políticas internas, preços, procedimentos, scripts, perguntas frequentes). Use ANTES de responder qualquer pergunta sobre "como fazemos X", preço, prazo padrão, política ou processo interno — não invente essas respostas de memória nem do histórico da conversa, procure na base primeiro. Se não achar nada relevante, diga que não tem essa informação registrada em vez de supor.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', description: 'Termo ou pergunta a buscar na base de conhecimento.' },
+      },
+      required: ['query'],
+    },
+  },
+  {
     name: 'create_client',
     description:
       'ESCRITA. Cadastra um cliente novo no CRM. Use sempre que pedirem pra "cadastrar", "adicionar" ou "criar" um cliente/lead novo. Preencha o máximo de informação possível: se vier link de Instagram, WhatsApp, endereço, link de localização, etc., coloque tudo em "notes" de forma organizada (não perca nenhum dado que a pessoa mandou, mesmo que não caiba em um campo específico).',
@@ -1234,13 +1248,14 @@ Você tem memória das últimas mensagens dessa conversa (aparecem no histórico
 
 Regras:
 1. Para qualquer pedido envolvendo um cliente específico, use search_clients primeiro se você não tiver o client_id — nunca invente um ID. Antes de usar create_client, sempre rode search_clients pelo nome primeiro: se já existir algo parecido, use update_client nesse cliente em vez de criar outro (o sistema também bloqueia duplicata por telefone/nome como segurança extra, mas não confie só nisso).
-2. Ferramentas de LEITURA (search_clients, get_client_summary) você pode chamar livremente para reunir contexto.
+2. Ferramentas de LEITURA (search_clients, get_client_summary, search_knowledge, check_messages) você pode chamar livremente para reunir contexto.
 3. Ferramentas de ESCRITA (create_client, update_client, create_task, update_task_status, assign_task, create_operation, update_operation_status, add_operation_comment, delete_client) NUNCA são executadas na hora — ao chamar uma delas, o sistema registra a ação como pendente e te avisa. NUNCA pergunte "confirma?" em texto solto por conta própria, sem ter chamado a ferramenta — isso não registra nada e trava o fluxo. O jeito certo é: chame a ferramenta primeiro; o tool_result vai te avisar que está pendente; SÓ AÍ você escreve a pergunta de confirmação pro usuário, em uma frase, descrevendo o que vai mudar e terminando com algo como "Confirma? Responda *sim* ou *não*."
 3b. send_message é DIFERENTE de todas as outras ferramentas de escrita e NÃO segue a regra 3: chame a ferramenta send_message IMEDIATAMENTE, na mesma resposta em que decidir enviar, sem perguntar "confirma?" antes nem depois — o resultado do tool_result já confirma que foi enviado, então só informe isso em uma frase curta ("Pronto! Mandei pra fulano."). NUNCA pergunte "Confirma? Responda sim ou não" pra send_message — mesmo que o histórico da conversa abaixo mostre você tendo perguntado isso antes, esse comportamento mudou: agora é sempre direto, sem exceção.
 4. Chame no máximo UMA ferramenta de escrita por mensagem do usuário. Se o pedido envolve vários itens da MESMA ação (ex: apagar vários clientes de uma vez), isso ainda conta como uma chamada só — use uma ferramenta que aceite lista (como delete_client) em vez de chamar várias vezes.
 5. Respostas curtas e diretas — 1 a 3 frases, no máximo. Nada de parágrafo explicando contexto óbvio ou listando tudo que você fez passo a passo. Está no WhatsApp, não é um relatório. Só entra em mais detalhe se o usuário pedir explicitamente.
 6. Se não entender o pedido ou faltar informação (ex: qual cliente, qual tarefa), pergunte antes de agir — em uma frase curta.
-7. Quando o usuário pedir um serviço (arte pra post, gravação, edição, tráfego) sem dizer quem deve fazer, use create_task com "department" em vez de perguntar quem é o responsável — a agência já tem gente fixa pra cada função.`
+7. Quando o usuário pedir um serviço (arte pra post, gravação, edição, tráfego) sem dizer quem deve fazer, use create_task com "department" em vez de perguntar quem é o responsável — a agência já tem gente fixa pra cada função.
+8. Antes de responder qualquer pergunta sobre política interna, preço, prazo padrão ou "como a gente faz X", chame search_knowledge primeiro — mesmo que ache que sabe a resposta. Só responda com o que vier da busca; se não achar nada, diga que não tem isso registrado na base em vez de inventar ou usar conhecimento genérico.`
 }
 
 async function callClaudeMessages(
@@ -1449,6 +1464,21 @@ async function executeReadTool(
       .order('name')
       .limit(10)
     return { clients: data ?? [] }
+  }
+
+  if (toolName === 'search_knowledge') {
+    const query = String(input.query ?? '').trim()
+    if (!query) return { error: 'query vazia' }
+    const { data, error } = await supabase.rpc('search_knowledge_base', {
+      p_workspace_id: workspaceId,
+      p_query: query,
+      p_audiences: ['hermes', 'both'],
+      p_limit: 5,
+    })
+    const results = (data ?? []) as { title: string; content: string; category: string }[]
+    if (error) return { error: error.message }
+    if (results.length === 0) return { results: [], note: 'Nada encontrado na base de conhecimento pra essa busca.' }
+    return { results }
   }
 
   if (toolName === 'get_client_summary') {
@@ -2653,12 +2683,38 @@ function fallbackReply(
   return `${prefix}Perfeito! Anotei seu pedido (“${message.slice(0, 80)}”). Vou direcionar para nossa equipe de ${who}, que cuida disso. Em breve alguém retorna por aqui.`
 }
 
+/**
+ * Busca na base de conhecimento (knowledge_base) entradas relevantes pra
+ * mensagem do cliente, só as liberadas pro bot de clientes ('clients' ou
+ * 'both' — nunca 'hermes', que é interno). Falha em silêncio (retorna vazio)
+ * pra nunca travar a resposta ao cliente por causa disso.
+ */
+async function searchKnowledgeForClientBot(
+  supabase: ReturnType<typeof createClient>,
+  workspaceId: string,
+  message: string,
+): Promise<{ title: string; content: string; category: string }[]> {
+  try {
+    const { data } = await supabase.rpc('search_knowledge_base', {
+      p_workspace_id: workspaceId,
+      p_query: message,
+      p_audiences: ['clients', 'both'],
+      p_limit: 5,
+    })
+    return (data ?? []) as { title: string; content: string; category: string }[]
+  } catch (err) {
+    console.error('searchKnowledgeForClientBot failed', err)
+    return []
+  }
+}
+
 async function generateWithGroq(
   apiKey: string,
   ctx: {
     clientName: string
     message: string
     memories: { title: string; content: string; category: string }[]
+    knowledge: { title: string; content: string; category: string }[]
     department: Department
     departmentLabel: string
     greeting: string | null
@@ -2669,6 +2725,11 @@ async function generateWithGroq(
     .map((m) => `- [${m.category}] ${m.title}: ${m.content.slice(0, 220)}`)
     .join('\n')
 
+  const knowledgeBlock = ctx.knowledge
+    .slice(0, 5)
+    .map((k) => `- [${k.category}] ${k.title}: ${k.content.slice(0, 300)}`)
+    .join('\n')
+
   const continuityInstruction = ctx.greeting
     ? `Essa é a primeira mensagem do cliente hoje — comece a resposta com "${ctx.greeting}!" antes de responder o pedido dele.`
     : 'Essa conversa já está em andamento hoje (não é a primeira mensagem) — NÃO cumprimente de novo (nada de "Olá"/"Oi"/"Bom dia" etc.), vá direto responder a mensagem.'
@@ -2676,14 +2737,14 @@ async function generateWithGroq(
   const system = `Você é o assistente de WhatsApp da agência TettoHub, atendendo o cliente "${ctx.clientName}".
 Tom: humano, acolhedor, profissional, frases curtas (máx 4 frases).
 Idioma: português do Brasil.
-Nunca invente preços, prazos ou fatos que não estejam no contexto.
+Nunca invente preços, prazos ou fatos que não estejam no contexto ou na base de conhecimento abaixo. Se a pergunta for sobre preço/prazo/política e não tiver nada relevante na base de conhecimento, diga que vai confirmar com a equipe em vez de supor um valor.
 Se o pedido for operacional, confirme e diga que a equipe de ${ctx.departmentLabel} vai executar.
 Se for dúvida geral, responda com o que souber do contexto.
 Intenção classificada: ${ctx.department}.
 ${continuityInstruction}
 Não fique repetindo o nome do cliente em toda mensagem — use o nome só quando fizer sentido (ex: primeira mensagem do dia), não em toda resposta.`
 
-  const user = `Contexto do cliente:\n${memoryBlock || '(sem memória)'}\n\nMensagem do cliente:\n${ctx.message}`
+  const user = `Contexto do cliente:\n${memoryBlock || '(sem memória)'}\n\nBase de conhecimento da agência (políticas, preços, procedimentos):\n${knowledgeBlock || '(nada relevante encontrado)'}\n\nMensagem do cliente:\n${ctx.message}`
 
   try {
     const res = await fetchWithTimeout(

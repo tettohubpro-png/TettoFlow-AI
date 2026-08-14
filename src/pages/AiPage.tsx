@@ -33,9 +33,9 @@ const KNOWLEDGE_CATEGORY_LABELS: Record<KnowledgeCategory, string> = {
 }
 
 const AUDIENCE_LABELS: Record<KnowledgeAudience, string> = {
-  hermes: 'Só Hermes (interno)',
+  hermes: 'Só Tettolino (interno)',
   clients: 'Só bot de clientes',
-  both: 'Hermes + clientes',
+  both: 'Tettolino + clientes',
 }
 
 const EMPTY_KNOWLEDGE_FORM = {
@@ -53,7 +53,7 @@ export function AiPage() {
     <div>
       <header className="mb-6">
         <h2 className="text-2xl font-bold">IA Operacional</h2>
-        <p className="text-slate-400">Memória por cliente + base de conhecimento que o Hermes consulta</p>
+        <p className="text-slate-400">Memória por cliente + base de conhecimento que o Tettolino consulta</p>
       </header>
 
       <div className="mb-6 flex gap-1 border-b border-slate-800">
@@ -398,7 +398,7 @@ function KnowledgeBaseTab() {
         </form>
 
         <p className="mt-3 text-xs text-slate-500">
-          "Só Hermes" fica restrito ao assistente interno da equipe. "Só bot de clientes" e "Hermes +
+          "Só Tettolino" fica restrito ao assistente interno da equipe. "Só bot de clientes" e "Tettolino +
           clientes" também podem aparecer nas respostas automáticas pro WhatsApp do cliente — não coloque
           nada sensível nessas duas opções.
         </p>

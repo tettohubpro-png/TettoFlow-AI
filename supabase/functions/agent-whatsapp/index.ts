@@ -1026,6 +1026,18 @@ const HERMES_TOOLS = [
     },
   },
   {
+    name: 'search_team',
+    description:
+      'LEITURA. Busca membros da equipe da TettoHub pelo nome (ou parte dele) — retorna nome, cargo, função/departamento e se tem WhatsApp cadastrado. Use SEMPRE antes de dizer "não encontrei" alguém da equipe, e antes de qualquer ferramenta que precise de um responsável (send_message, assign_task, create_task).',
+    input_schema: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', description: 'Nome ou parte do nome da pessoa a buscar.' },
+      },
+      required: ['query'],
+    },
+  },
+  {
     name: 'search_knowledge',
     description:
       'LEITURA. Busca na base de conhecimento da agência (políticas internas, preços, procedimentos, scripts, perguntas frequentes). Use ANTES de responder qualquer pergunta sobre "como fazemos X", preço, prazo padrão, política ou processo interno — não invente essas respostas de memória nem do histórico da conversa, procure na base primeiro. Se não achar nada relevante, diga que não tem essa informação registrada em vez de supor.',
@@ -1238,7 +1250,7 @@ function hermesSystemPrompt(operatorName: string, operatorRole: string): string 
     ? `Quem está falando com você agora é ${operatorName}, o(a) **${roleLabel}** da TettoHub — a maior autoridade na agência. Trate essa pessoa com prioridade máxima: dê respostas completas, sem omitir informação, e assuma que ela tem acesso irrestrito a qualquer dado do CRM (todos os clientes, todas as operações, tudo). Não hesite nem peça permissão extra além da confirmação normal de ações de escrita.`
     : `Quem está falando com você agora é ${operatorName}, **${roleLabel}** da equipe TettoHub. Por enquanto o acesso dele(a) às ferramentas é o mesmo de qualquer operador (a restrição de informação por cargo ainda não foi implementada — está planejada, mas ainda não vale). Trate normalmente, com o mesmo cuidado de sempre nas confirmações de escrita.`
 
-  return `Você é o Hermes, assistente operacional interno da TettoHub, conversando por WhatsApp com um membro da equipe (não é cliente).
+  return `Você é o Tettolino, assistente operacional interno da TettoHub, conversando por WhatsApp com um membro da equipe (não é cliente).
 
 ${hierarchyBlock}
 
@@ -1247,15 +1259,15 @@ Seu papel: ajudar a equipe a consultar e atualizar o CRM (clientes, tarefas, ope
 Você tem memória das últimas mensagens dessa conversa (aparecem no histórico abaixo) — use esse contexto pra entender pedidos que fazem referência a algo dito antes ("aquele cliente", "a tarefa que criei"), sem precisar que a pessoa repita tudo.
 
 Regras:
-1. Para qualquer pedido envolvendo um cliente específico, use search_clients primeiro se você não tiver o client_id — nunca invente um ID. Antes de usar create_client, sempre rode search_clients pelo nome primeiro: se já existir algo parecido, use update_client nesse cliente em vez de criar outro (o sistema também bloqueia duplicata por telefone/nome como segurança extra, mas não confie só nisso).
-2. Ferramentas de LEITURA (search_clients, get_client_summary, search_knowledge, check_messages) você pode chamar livremente para reunir contexto.
+1. Para qualquer pedido envolvendo um cliente específico, use search_clients primeiro se você não tiver o client_id — nunca invente um ID. Antes de usar create_client, sempre rode search_clients pelo nome primeiro: se já existir algo parecido, use update_client nesse cliente em vez de criar outro (o sistema também bloqueia duplicata por telefone/nome como segurança extra, mas não confie só nisso). Da mesma forma, se perguntarem sobre uma PESSOA e não estiver claro se é cliente ou equipe, use search_team primeiro (ou os dois, search_clients e search_team) antes de dizer "não encontrei" — nunca responda que não achou alguém sem ter buscado.
+2. Ferramentas de LEITURA (search_clients, get_client_summary, search_team, search_knowledge, check_messages) você pode chamar livremente para reunir contexto.
 3. Ferramentas de ESCRITA (create_client, update_client, create_task, update_task_status, assign_task, create_operation, update_operation_status, add_operation_comment, delete_client) NUNCA são executadas na hora — ao chamar uma delas, o sistema registra a ação como pendente e te avisa. NUNCA pergunte "confirma?" em texto solto por conta própria, sem ter chamado a ferramenta — isso não registra nada e trava o fluxo. O jeito certo é: chame a ferramenta primeiro; o tool_result vai te avisar que está pendente; SÓ AÍ você escreve a pergunta de confirmação pro usuário, em uma frase, descrevendo o que vai mudar e terminando com algo como "Confirma? Responda *sim* ou *não*."
 3b. send_message é DIFERENTE de todas as outras ferramentas de escrita e NÃO segue a regra 3: chame a ferramenta send_message IMEDIATAMENTE, na mesma resposta em que decidir enviar, sem perguntar "confirma?" antes nem depois — o resultado do tool_result já confirma que foi enviado, então só informe isso em uma frase curta ("Pronto! Mandei pra fulano."). NUNCA pergunte "Confirma? Responda sim ou não" pra send_message — mesmo que o histórico da conversa abaixo mostre você tendo perguntado isso antes, esse comportamento mudou: agora é sempre direto, sem exceção.
 4. Chame no máximo UMA ferramenta de escrita por mensagem do usuário. Se o pedido envolve vários itens da MESMA ação (ex: apagar vários clientes de uma vez), isso ainda conta como uma chamada só — use uma ferramenta que aceite lista (como delete_client) em vez de chamar várias vezes.
 5. Respostas curtas e diretas — 1 a 3 frases, no máximo. Nada de parágrafo explicando contexto óbvio ou listando tudo que você fez passo a passo. Está no WhatsApp, não é um relatório. Só entra em mais detalhe se o usuário pedir explicitamente.
 6. Se não entender o pedido ou faltar informação (ex: qual cliente, qual tarefa), pergunte antes de agir — em uma frase curta.
 7. Quando o usuário pedir um serviço (arte pra post, gravação, edição, tráfego) sem dizer quem deve fazer, use create_task com "department" em vez de perguntar quem é o responsável — a agência já tem gente fixa pra cada função.
-8. Antes de responder qualquer pergunta sobre política interna, preço, prazo padrão ou "como a gente faz X", chame search_knowledge primeiro — mesmo que ache que sabe a resposta. Só responda com o que vier da busca; se não achar nada, diga que não tem isso registrado na base em vez de inventar ou usar conhecimento genérico.`
+8. search_knowledge é a sua base de memória e raciocínio — não só pra política/preço/procedimento: chame ela SEMPRE que a pergunta não for resolvida diretamente por search_clients/search_team/get_client_summary/check_messages, antes de responder e antes de dizer "não sei" ou "não tenho essa informação". Só responda com o que vier da busca (ou do CRM); se não achar nada em nenhuma das duas, diga claramente que não tem isso registrado em vez de inventar ou usar conhecimento genérico.`
 }
 
 async function callClaudeMessages(
@@ -1464,6 +1476,30 @@ async function executeReadTool(
       .order('name')
       .limit(10)
     return { clients: data ?? [] }
+  }
+
+  if (toolName === 'search_team') {
+    const query = String(input.query ?? '').trim()
+    if (!query) return { error: 'query vazia' }
+    const { data } = await supabase
+      .from('memberships')
+      .select('role, job_role, users(name, whatsapp_phone)')
+      .eq('workspace_id', workspaceId)
+    const matches = (data ?? [])
+      .map((m) => ({
+        role: m.role as string,
+        job_role: (m.job_role as string | null) ?? null,
+        user: m.users as unknown as { name: string; whatsapp_phone: string | null } | null,
+      }))
+      .filter((m) => (m.user?.name ? fuzzyNameMatch(query, m.user.name) : false))
+      .map((m) => ({
+        name: m.user?.name,
+        role: ROLE_LABELS[m.role] ?? m.role,
+        job_role: m.job_role,
+        has_whatsapp: !!m.user?.whatsapp_phone,
+      }))
+    if (matches.length === 0) return { members: [], note: 'Ninguém da equipe encontrado com esse nome.' }
+    return { members: matches }
   }
 
   if (toolName === 'search_knowledge') {
@@ -2310,7 +2346,7 @@ async function handleHermesMessage(
       payload.message,
     )
   } else if (!apiKey) {
-    reply = 'Hermes ainda não está configurado (falta a chave da IA). Avisa o time técnico.'
+    reply = 'Tettolino ainda não está configurado (falta a chave da IA). Avisa o time técnico.'
   } else {
     try {
       const history = await loadRecentHermesMessages(supabase, workspaceId, operator.id)

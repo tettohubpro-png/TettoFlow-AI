@@ -220,7 +220,7 @@ export function TeamPage() {
               onChange={(e) => setForm({ ...form, whatsapp_phone: e.target.value })}
             />
             <span className="mt-1 block text-xs" style={{ color: 'var(--color-text3)' }}>
-              Precisa disso pro Hermes reconhecer que a pessoa é da equipe quando mandar mensagem
+              Precisa disso pro Tettolino reconhecer que a pessoa é da equipe quando mandar mensagem
               pelo número da agência — sem isso, ela é tratada como cliente novo.
             </span>
           </label>
@@ -263,7 +263,7 @@ export function TeamPage() {
                   </div>
                 </div>
 
-                <label className="tf-label mt-4">WhatsApp (identificação pelo Hermes)</label>
+                <label className="tf-label mt-4">WhatsApp (identificação pelo Tettolino)</label>
                 <div className="flex gap-2">
                   <input
                     type="tel"
@@ -289,7 +289,7 @@ export function TeamPage() {
                 </div>
                 {!m.user.whatsapp_phone && (
                   <p className="mt-1 text-xs" style={{ color: 'var(--color-warning, #f59e0b)' }}>
-                    Sem WhatsApp cadastrado — o Hermes vai tratar mensagens dessa pessoa como
+                    Sem WhatsApp cadastrado — o Tettolino vai tratar mensagens dessa pessoa como
                     cliente novo, não como equipe.
                   </p>
                 )}

@@ -392,8 +392,8 @@ function InternalContextPanel({ conversation }: { conversation: Conversation }) 
           </p>
         ) : (
           <p className="mt-2 text-xs text-slate-500">
-            Não é uma conversa com cliente — é o Hermes falando com alguém da equipe (ou uma
-            mensagem enviada pelo Hermes a pedido de alguém), pelo número da agência.
+            Não é uma conversa com cliente — é o Tettolino falando com alguém da equipe (ou uma
+            mensagem enviada pelo Tettolino a pedido de alguém), pelo número da agência.
           </p>
         )}
       </section>

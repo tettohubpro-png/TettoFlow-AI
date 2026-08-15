@@ -1603,15 +1603,17 @@ async function resolveClientRef(
   supabase: ReturnType<typeof createClient>,
   workspaceId: string,
   input: { client_id?: string; client_name?: string },
+  excludeArchived = false,
 ): Promise<{ id: string } | { error: string }> {
   if (input.client_id) return { id: input.client_id }
   if (input.client_name) {
-    const { data } = await supabase
+    let query = supabase
       .from('clients')
       .select('id, name')
       .eq('workspace_id', workspaceId)
       .ilike('name', `%${input.client_name}%`)
-      .limit(2)
+    if (excludeArchived) query = query.neq('status', 'ARCHIVED')
+    const { data } = await query.limit(2)
     if (data && data.length === 1) return { id: data[0].id as string }
     if (data && data.length > 1) {
       return {
@@ -1621,10 +1623,9 @@ async function resolveClientRef(
 
     // ILIKE (substring exata) não achou nada — tenta de novo tolerando erro
     // de digitação/transcrição de áudio (ex: nome com uma letra diferente).
-    const { data: allClients } = await supabase
-      .from('clients')
-      .select('id, name')
-      .eq('workspace_id', workspaceId)
+    let allQuery = supabase.from('clients').select('id, name').eq('workspace_id', workspaceId)
+    if (excludeArchived) allQuery = allQuery.neq('status', 'ARCHIVED')
+    const { data: allClients } = await allQuery
     const fuzzy = (allClients ?? []).filter((c) => fuzzyNameMatch(input.client_name!, c.name as string))
     if (fuzzy.length === 1) return { id: fuzzy[0].id as string }
     if (fuzzy.length > 1) {
@@ -1909,9 +1910,12 @@ async function executeWriteTool(
           )
         }
 
-        const clientRef = await resolveClientRef(supabase, workspaceId, {
-          client_name: input.to_client_name as string,
-        })
+        const clientRef = await resolveClientRef(
+          supabase,
+          workspaceId,
+          { client_name: input.to_client_name as string },
+          true, // não faz sentido mandar mensagem pra um cliente arquivado
+        )
         if ('error' in clientRef) throw new Error(clientRef.error)
         const { data: contact } = await supabase
           .from('client_contacts')
@@ -2191,10 +2195,15 @@ async function executeWriteTool(
     }
 
     case 'create_operation': {
-      const clientRef = await resolveClientRef(supabase, workspaceId, {
-        client_id: input.client_id as string | undefined,
-        client_name: input.client_name as string | undefined,
-      })
+      const clientRef = await resolveClientRef(
+        supabase,
+        workspaceId,
+        {
+          client_id: input.client_id as string | undefined,
+          client_name: input.client_name as string | undefined,
+        },
+        true, // não faz sentido criar operação nova pra um cliente arquivado
+      )
       if ('error' in clientRef) throw new Error(clientRef.error)
       const { data, error } = await supabase
         .from('operations')

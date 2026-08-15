@@ -5,6 +5,31 @@
 > deploys verificados, testes reais). Antes disso, ver "Linha de base histórica" ao final —
 > reconstruída a partir do `git log`, sem acesso a decisões não documentadas em commit.
 
+## 2026-08-15T02:32:00+00:00 — Corrige cliente "AM Consultoria" duplicado e telefone no cadastro errado (v48)
+
+- **Solicitação:** usuário pediu pra verificar se as imagens enviadas chegaram na
+  conversa real do cliente; depois de investigar, pediu pra corrigir os cadastros
+  duplicados (ativar o certo, arquivar os errados).
+- **Investigação:** 3 cadastros de "AM Consultoria". O marcado ACTIVE tinha telefone
+  incompleto (`98559-4885`, sem DDD). O telefone real (`559885594885`, com histórico de
+  conversa real) estava num cadastro INACTIVE (lead duplicado). `resolveClientRef` não
+  excluía arquivados da busca por nome, então mesmo arquivando os errados a ambiguidade
+  continuaria.
+- **Alterações realizadas:** cadastro com telefone certo promovido a ACTIVE; os dois
+  errados marcados ARCHIVED. `resolveClientRef` ganhou parâmetro `excludeArchived`,
+  usado em `send_message`/`create_operation` (não em `delete_client`, que precisa achar
+  cliente já arquivado).
+- **Arquivos afetados:** `supabase/functions/agent-whatsapp/index.ts`,
+  `supabase/migrations/20260815010000_fix_am_consultoria_duplicate_clients.sql`.
+- **Validação executada:** `deno check` sem erro novo. Testado ponta a ponta em produção:
+  `send_message` com "am consultoria" resolveu sem ambiguidade e a mensagem de teste
+  ("oi teste") apareceu na MESMA thread da conversa real do cliente (client_id
+  confirmado batendo com o histórico real). Deploy v48 verificado byte a byte.
+- **Impactos e compatibilidade:** mensagem de teste real ("oi teste") foi enviada pro
+  WhatsApp real do cliente durante a validação — não dava pra testar esse cenário
+  específico (duplicidade de cadastro real) com cliente fictício.
+- **Referência Git:** commit a ser criado nesta tarefa.
+
 ## 2026-08-14T20:30:00+00:00 — Corrige fotos sem legenda descartadas + resposta quebrando com múltiplas imagens (v46, v47)
 
 - **Solicitação:** dono precisava urgentemente mandar 2 imagens reais pra um cliente;

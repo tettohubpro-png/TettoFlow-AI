@@ -21,6 +21,7 @@
 | LES-0011 | Tettolino — confirmação pendente | Erro | Ação pendente sem expiração travava TODAS as mensagens seguintes num loop de "não entendi" | Vigente | 2026-08-14 |
 | LES-0012 | Atendimento a cliente — fora do horário | Erro | Mensagem de "estamos fechados" ignorava delay/checagem de humano, atropelando resposta real da equipe fora do horário configurado | Vigente | 2026-08-14 |
 | LES-0013 | Tettolino — encaminhar imagem | Erro | Foto sem legenda pro operador era descartada silenciosamente (nunca chegava); busca+envio sequencial de várias imagens quebrava a resposta inteira sem cair no catch | Vigente | 2026-08-14 |
+| LES-0014 | Cliente duplicado — telefone no cadastro errado | Erro | Cliente ATIVO com telefone quebrado (sem DDD) + conversa real presa num cadastro INATIVO duplicado; resolveClientRef não excluía arquivados, mantendo ambiguidade mesmo depois de arquivar | Vigente | 2026-08-15 |
 
 ## Regras preventivas consolidadas
 
@@ -501,6 +502,51 @@
 - **Referências:** commit a ser criado nesta tarefa; migration
   `20260814200000_operator_pending_media.sql`.
 - **Confiança:** Alta (reproduzido, corrigido e revalidado em produção)
+
+### LES-0014 — Telefone certo estava no cadastro duplicado errado + busca não excluía arquivados
+- **Status:** Vigente
+- **Tipo:** Erro
+- **Severidade:** Alta
+- **Área/módulo:** dados do cliente "AM Consultoria" + `resolveClientRef` (`agent-whatsapp`)
+- **Primeira ocorrência:** dado legado, não determinado; descoberto em 2026-08-15
+- **Última validação:** 2026-08-15, testado ponta a ponta em produção
+- **Sintoma:** usuário pediu pra verificar se imagens mandadas "pra AM Consultoria"
+  realmente chegaram no cliente — investigação não achou nenhum registro na conversa
+  real do cliente.
+- **Causa raiz:** 3 cadastros duplicados de "AM Consultoria" no CRM. O cadastro marcado
+  como ACTIVE tinha telefone incompleto (`98559-4885`, faltando o DDD "98" no início) —
+  número não-discável. O telefone CERTO (`559885594885`, onde a conversa real de fato
+  acontece, com histórico real de mensagens) estava anexado a um cadastro **INACTIVE**
+  (lead duplicado, criado depois por engano). Além disso, `resolveClientRef` (usado por
+  `send_message`/`create_operation`) buscava por nome em TODOS os status, então mesmo
+  arquivando os cadastros errados, a ambiguidade de "múltiplos clientes encontrados"
+  continuaria.
+- **Impacto:** qualquer tentativa de mandar mensagem/imagem "pra AM Consultoria" por nome
+  batia em cadastro sem telefone válido ou em ambiguidade — bloqueando entrega real.
+- **Solução aplicada:** (a) cadastro com telefone certo promovido a ACTIVE; os dois
+  errados (telefone quebrado / já arquivado) marcados ARCHIVED. (b) `resolveClientRef`
+  ganhou parâmetro `excludeArchived` — `true` nas chamadas de `send_message` e
+  `create_operation` (não faz sentido mandar mensagem/criar operação pra cliente
+  arquivado), mantido `false` (padrão) em `delete_client` (precisa conseguir atingir
+  cliente já arquivado).
+- **Validação da solução:** testado ponta a ponta — consulta direta confirmou só 1
+  cliente ativo batendo com "am consultoria"; `send_message` com `to_client_name: "am
+  consultoria"` resolveu sem ambiguidade e a mensagem de teste apareceu na MESMA thread
+  da conversa real do cliente (confirmado via `conversation_messages`, mesmo `client_id`
+  do histórico real). Deploy v48 verificado byte a byte.
+- **Regra preventiva:** ao investigar "mensagem não chegou" pra um cliente específico,
+  checar se existe MAIS DE UM cadastro com nome parecido e se o telefone válido está no
+  cadastro que o sistema realmente vai escolher (o ATIVO, ou o que a busca por nome
+  retorna). Funções de resolução de cliente por nome usadas pra AÇÕES (mandar mensagem,
+  criar operação) devem excluir clientes arquivados por padrão — funções de BUSCA/
+  LEITURA (`search_clients`) devem continuar mostrando tudo, incluindo arquivados, pra
+  dar visibilidade.
+- **Quando esta regra se aplica:** qualquer relato de "não chegou"/"não encontrou
+  cliente" quando existe possibilidade de cadastro duplicado.
+- **Skills relacionadas:** SKL-0001, SKL-0002
+- **Referências:** migration `20260815010000_fix_am_consultoria_duplicate_clients.sql`.
+- **Confiança:** Alta (causa raiz confirmada em dados reais, correção testada ponta a
+  ponta em produção)
 
 ## Registro rápido durante a tarefa
 

@@ -1465,7 +1465,7 @@ Regras:
 1. Para qualquer pedido envolvendo um cliente específico, use search_clients primeiro se você não tiver o client_id — nunca invente um ID. Antes de usar create_client, sempre rode search_clients pelo nome primeiro: se já existir algo parecido, use update_client nesse cliente em vez de criar outro (o sistema também bloqueia duplicata por telefone/nome como segurança extra, mas não confie só nisso). Da mesma forma, se perguntarem sobre uma PESSOA e não estiver claro se é cliente ou equipe, use search_team primeiro (ou os dois, search_clients e search_team) antes de dizer "não encontrei" — nunca responda que não achou alguém sem ter buscado.
 2. Ferramentas de LEITURA (search_clients, get_client_summary, search_team, search_knowledge, check_messages) você pode chamar livremente para reunir contexto.
 3. Ferramentas de ESCRITA (create_client, update_client, create_task, update_task_status, assign_task, create_operation, update_operation_status, add_operation_comment, delete_client) NUNCA são executadas na hora — ao chamar uma delas, o sistema registra a ação como pendente e te avisa. NUNCA pergunte "confirma?" em texto solto por conta própria, sem ter chamado a ferramenta — isso não registra nada e trava o fluxo. O jeito certo é: chame a ferramenta primeiro; o tool_result vai te avisar que está pendente; SÓ AÍ você escreve a pergunta de confirmação pro usuário, em uma frase, descrevendo o que vai mudar e terminando com algo como "Confirma? Responda *sim* ou *não*."
-3b. send_message é DIFERENTE de todas as outras ferramentas de escrita e NÃO segue a regra 3: chame a ferramenta send_message IMEDIATAMENTE, na mesma resposta em que decidir enviar, sem perguntar "confirma?" antes nem depois — o resultado do tool_result já confirma que foi enviado, então só informe isso em uma frase curta ("Pronto! Mandei pra fulano."). NUNCA pergunte "Confirma? Responda sim ou não" pra send_message — mesmo que o histórico da conversa abaixo mostre você tendo perguntado isso antes, esse comportamento mudou: agora é sempre direto, sem exceção. Imagens são encaminhadas automaticamente quando existem — tanto se a mensagem atual veio com foto+legenda, quanto se a pessoa mandou foto(s) sem legenda ANTES e só agora te disse pra quem mandar (você não precisa fazer nada especial pra isso, o sistema já junta sozinho — nunca diga "não recebi imagem" sem antes tentar chamar send_message, porque a imagem pode ter chegado numa mensagem anterior). Olhe o campo "image_forwarded"/"images_forwarded_count" no resultado: se vier true, diga que mandou a(s) imagem(ns) ("Pronto! Mandei a imagem pra fulano." ou "Mandei as 2 imagens pra fulano."); se vier "image_forward_failed": true, avise que só o texto foi (a imagem falhou) e peça pra tentar reenviar a imagem.
+3b. send_message é DIFERENTE de todas as outras ferramentas de escrita e NÃO segue a regra 3: chame a ferramenta send_message IMEDIATAMENTE, na mesma resposta em que decidir enviar, sem perguntar "confirma?" antes nem depois. NUNCA pergunte "Confirma? Responda sim ou não" pra send_message — mesmo que o histórico da conversa abaixo mostre você tendo perguntado isso antes, esse comportamento mudou: agora é sempre direto, sem exceção. IMPORTANTE: "sent: true" no resultado só significa que a ferramenta rodou sem erro — NÃO significa que a mensagem chegou de verdade no WhatsApp da pessoa. Olhe sempre o campo "delivered": se vier true, aí sim confirme em uma frase curta ("Pronto! Mandei pra fulano."); se vier **false**, a Evolution API não confirmou a entrega (motivo comum: número sem DDI ou inválido) — avise claramente que a mensagem PODE NÃO TER CHEGADO e peça pra conferir o número. Nunca diga "Pronto! Mandei" quando "delivered" for false. Imagens são encaminhadas automaticamente quando existem — tanto se a mensagem atual veio com foto+legenda, quanto se a pessoa mandou foto(s) sem legenda ANTES e só agora te disse pra quem mandar (você não precisa fazer nada especial pra isso, o sistema já junta sozinho — nunca diga "não recebi imagem" sem antes tentar chamar send_message, porque a imagem pode ter chegado numa mensagem anterior). Olhe também "image_forwarded"/"images_forwarded_count": se vier true, diga que mandou a(s) imagem(ns); se vier "image_forward_failed": true, avise que a imagem falhou.
 4. Chame no máximo UMA ferramenta de escrita por mensagem do usuário. Se o pedido envolve vários itens da MESMA ação (ex: apagar vários clientes de uma vez), isso ainda conta como uma chamada só — use uma ferramenta que aceite lista (como delete_client) em vez de chamar várias vezes.
 5. Respostas curtas e diretas — 1 a 3 frases, no máximo. Nada de parágrafo explicando contexto óbvio ou listando tudo que você fez passo a passo. Está no WhatsApp, não é um relatório. Só entra em mais detalhe se o usuário pedir explicitamente.
 6. Se não entender o pedido ou faltar informação (ex: qual cliente, qual tarefa), pergunte antes de agir — em uma frase curta.
@@ -1928,8 +1928,21 @@ async function executeWriteTool(
         targetLabel = (contact.name as string | undefined) ?? String(input.to_client_name)
         clientForLog = { id: clientRef.id }
       } else if (input.to_phone) {
-        targetPhone = String(input.to_phone)
+        // Número "cru" digitado sem o 55 (DDI Brasil) não é um JID válido de
+        // WhatsApp — a Evolution API aceita a chamada mas nunca entrega, sem
+        // erro nenhum (bug real: 3 mensagens "enviadas" no CRM que nunca
+        // chegaram no celular do destinatário). Garante o DDI antes de mandar.
+        const rawDigits = String(input.to_phone).replace(/\D/g, '')
+        targetPhone = rawDigits.startsWith('55') ? rawDigits : `55${rawDigits}`
         targetLabel = targetPhone
+
+        // Confirma o número real registrado no WhatsApp antes de mandar —
+        // bug real: número com 9º dígito não batia com conta registrada no
+        // formato antigo (sem o 9 extra), e a mensagem nunca chegava sem
+        // erro nenhum. Se a checagem não confirmar nada, segue com o número
+        // normalizado mesmo (não bloqueia o envio por causa da checagem).
+        const confirmedNumber = await resolveDeliverableNumber(undefined, targetPhone)
+        if (confirmedNumber) targetPhone = confirmedNumber
 
         // to_phone é a via "crua" — sem nome, então antes de mandar cego
         // pra um número desconhecido, checa se esse telefone já é de um
@@ -2059,8 +2072,16 @@ async function executeWriteTool(
         )
       }
 
+      // "sent" só descrevia que a ferramenta rodou sem lançar erro — não que
+      // a Evolution API de fato confirmou a entrega. Bug real: mensagem pra
+      // número sem DDI "entregava" sempre null de messageId, e o CRM
+      // registrava como enviada mesmo assim, sem avisar ninguém.
+      // "delivered" reflete a confirmação de verdade (id de mensagem
+      // recebido da Evolution, por texto ou imagem).
+      const delivered = imageForwarded || sentMessageId !== null
       return {
         sent: true,
+        delivered,
         to: targetLabel,
         image_forwarded: imageForwarded,
         images_forwarded_count: imagesForwarded,
@@ -3408,6 +3429,39 @@ function evolutionConfig(instance: string | undefined) {
   const inst = instance || Deno.env.get('EVOLUTION_INSTANCE')
   if (!base || !apiKey || !inst) return null
   return { base, apiKey, inst }
+}
+
+/**
+ * Confirma o número de WhatsApp de verdade antes de mandar pra um telefone
+ * "cru" (to_phone, sem cliente/operador cadastrado por trás). Bug real:
+ * número digitado com o 9º dígito (padrão atual de celular BR) não bate
+ * com uma conta de WhatsApp registrada no formato antigo (sem o 9 extra) —
+ * a Evolution aceita a chamada de envio mas nunca entrega, sem erro nenhum.
+ * `/chat/whatsappNumbers` devolve o JID real (já na forma que a conta usa),
+ * então usa esse em vez de confiar cegamente nos dígitos digitados.
+ */
+async function resolveDeliverableNumber(
+  instance: string | undefined,
+  phone: string,
+): Promise<string | null> {
+  const cfg = evolutionConfig(instance)
+  if (!cfg) return null
+  try {
+    const res = await fetchWithTimeout(`${cfg.base}/chat/whatsappNumbers/${cfg.inst}`, {
+      method: 'POST',
+      headers: { apikey: cfg.apiKey, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ numbers: [phone] }),
+    })
+    const body = await res.json().catch(() => null)
+    const entry = Array.isArray(body) ? body[0] : null
+    if (entry?.exists && typeof entry?.jid === 'string') {
+      return entry.jid.replace(/@.*/, '')
+    }
+    return null
+  } catch (err) {
+    console.error('resolveDeliverableNumber failed', err)
+    return null
+  }
 }
 
 /**

@@ -22,6 +22,8 @@
 | LES-0012 | Atendimento a cliente — fora do horário | Erro | Mensagem de "estamos fechados" ignorava delay/checagem de humano, atropelando resposta real da equipe fora do horário configurado | Vigente | 2026-08-14 |
 | LES-0013 | Tettolino — encaminhar imagem | Erro | Foto sem legenda pro operador era descartada silenciosamente (nunca chegava); busca+envio sequencial de várias imagens quebrava a resposta inteira sem cair no catch | Vigente | 2026-08-14 |
 | LES-0014 | Cliente duplicado — telefone no cadastro errado | Erro | Cliente ATIVO com telefone quebrado (sem DDD) + conversa real presa num cadastro INATIVO duplicado; resolveClientRef não excluía arquivados, mantendo ambiguidade mesmo depois de arquivar | Vigente | 2026-08-15 |
+| LES-0015 | send_message — número sem DDI/9º dígito | Erro | to_phone cru era mandado sem normalizar; número com 9º dígito não batia com conta registrada no formato antigo, e a Evolution "aceitava" sem nunca entregar | Vigente | 2026-08-16 |
+| LES-0016 | Anthropic API — saldo esgotado | Incidente | Todo o Tettolino parou de responder ("Deu ruim" pra qualquer mensagem, até "oi") porque a conta Anthropic ficou sem crédito — sintoma idêntico a um bug de código, mas era financeiro | Vigente | 2026-08-16 |
 
 ## Regras preventivas consolidadas
 
@@ -547,6 +549,89 @@
 - **Referências:** migration `20260815010000_fix_am_consultoria_duplicate_clients.sql`.
 - **Confiança:** Alta (causa raiz confirmada em dados reais, correção testada ponta a
   ponta em produção)
+
+### LES-0015 — send_message pra número cru não normalizava DDI nem confirmava o 9º dígito
+- **Status:** Vigente
+- **Tipo:** Erro
+- **Severidade:** Alta
+- **Área/módulo:** `agent-whatsapp` — `executeWriteTool('send_message')`, branch `to_phone`
+- **Primeira ocorrência:** não determinada (existia desde a introdução de `to_phone`);
+  confirmada em 2026-08-16 com print real do usuário (3 mensagens "enviadas" no CRM que
+  nunca chegaram no destinatário)
+- **Última validação:** 2026-08-16
+- **Sintoma:** usuário reportou "meu CRM não enviou a mensagem... só que não chegou no
+  celular dele" — CRM mostrava as mensagens como enviadas (outbound, sem erro), mas
+  nenhuma chegou de verdade no WhatsApp do destinatário.
+- **Causa raiz (duas partes):** (1) o número digitado ficava sem o DDI "55" quando o
+  usuário/modelo passava só os dígitos locais — `targetPhone = String(input.to_phone)`
+  usado cru, sem normalizar. (2) mesmo corrigindo o DDI, o número com o 9º dígito
+  "moderno" (padrão atual de celular BR) não batia com a conta de WhatsApp registrada no
+  formato ANTIGO (sem esse dígito extra) — a Evolution API aceita a chamada de envio
+  (sem erro HTTP) mas nunca confirma `key.id`, e o código não checava isso antes de
+  declarar sucesso (ver também LES-0013, mesma classe de "sucesso silencioso falso").
+- **Solução aplicada:** normaliza o DDI (`55` na frente se faltando) antes de qualquer
+  coisa. Antes de mandar, chama `/chat/whatsappNumbers/{instance}` da Evolution API
+  (`resolveDeliverableNumber`) — esse endpoint devolve o JID REAL já resolvido pro
+  formato que a conta usa (com ou sem o 9º dígito), e usa esse número confirmado em vez
+  de confiar cegamente nos dígitos digitados. Além disso, `send_message` agora retorna um
+  campo `delivered` (baseado em ter recebido um `evolution_message_id` de verdade) — o
+  system prompt foi ajustado pra nunca dizer "Pronto! Mandei" quando `delivered: false`.
+- **Validação da solução:** confirmado via chamada direta ao endpoint de checagem que o
+  número em questão (`5598992331897`, digitado com 9º dígito) resolve pro JID real
+  `559892331897` (sem o 9º dígito) — mecanismo comprovado tecnicamente correto. Não foi
+  possível confirmar entrega real ponta a ponta porque o saldo da API Anthropic esgotou
+  no meio do teste (ver LES-0016) — pendente reconfirmação assim que a conta for
+  recarregada.
+- **Regra preventiva:** nunca mandar mensagem WhatsApp pra um número "cru" (digitado, não
+  vindo de um cadastro já confiável) sem confirmar o JID real via endpoint de checagem da
+  Evolution/Baileys primeiro — números BR têm ambiguidade de DDI e 9º dígito que geram
+  falha silenciosa de entrega sem nenhum erro visível.
+- **Quando esta regra se aplica:** qualquer envio de WhatsApp pra número digitado
+  manualmente (não resolvido via cadastro de cliente/equipe já confirmado).
+- **Skills relacionadas:** SKL-0002
+- **Referências:** commit a ser criado nesta tarefa.
+- **Confiança:** Alta (causa raiz confirmada via chamada direta à API da Evolution;
+  entrega real ponta a ponta ainda pendente de reconfirmação pós-recarga de crédito)
+
+### LES-0016 — Saldo da API Anthropic esgotado derrubou o Tettolino inteiro (sintoma igual a bug de código)
+- **Status:** Vigente
+- **Tipo:** Incidente
+- **Severidade:** Crítica
+- **Área/módulo:** `agent-whatsapp` — `callClaudeMessages` / conta Anthropic da agência
+- **Primeira ocorrência:** 2026-08-16 (durante uma sessão intensa de testes)
+- **Última validação:** 2026-08-16
+- **Sintoma:** Tettolino respondia "Deu ruim aqui do meu lado processando seu pedido"
+  pra QUALQUER mensagem, inclusive um simples "oi" — sem padrão aparente ligado a
+  nenhuma funcionalidade específica.
+- **Contexto:** investigação de um bug de entrega de mensagem (LES-0015) levou a testes
+  repetidos em sequência rápida.
+- **Causa raiz:** a conta Anthropic da agência ficou sem saldo/crédito — a API retorna
+  erro ("Your credit balance is too low...") que o código já capturava corretamente
+  (`callClaudeMessages` lança erro se `!res.ok`), mas o texto genérico de fallback
+  ("Deu ruim...") escondia esse detalhe tanto do usuário quanto de mim, e `get_logs`
+  (via MCP) não expõe `console.error` — só resumo de método/status HTTP.
+  **Isso pode ter sido causado ou acelerado pelo volume alto de chamadas de teste feitas
+  nesta mesma sessão.**
+- **Diagnóstico:** como `get_logs` não mostra o conteúdo de `console.error`, foi
+  necessário um deploy temporário que anexava o erro real (truncado) na própria resposta
+  de fallback, testar uma vez, capturar o erro exato, e reverter o deploy imediatamente
+  em seguida.
+- **Solução aplicada:** nenhuma correção de código necessária (o comportamento de captar
+  o erro já estava certo) — a ação é do usuário: recarregar créditos na conta Anthropic
+  (console.anthropic.com → Plans & Billing).
+- **Regra preventiva:** quando TODAS as mensagens (até as mais triviais) começarem a
+  falhar de forma idêntica e genérica, suspeitar primeiro de causa EXTERNA (saldo de
+  API, chave revogada, serviço fora do ar) antes de investigar código — sintoma
+  "tudo quebrado igual, sem padrão" é característico de falha de infraestrutura/conta,
+  não de bug lógico específico. Ferramentas de log deste projeto (`get_logs` via MCP)
+  NÃO expõem `console.error`/`console.log` — só HTTP method/status; pra ver o conteúdo
+  real de um erro é preciso um deploy temporário que devolva o erro na resposta (e
+  reverter logo em seguida).
+- **Quando esta regra se aplica:** qualquer relato de "tudo parou de funcionar" sem
+  relação aparente com uma mudança de código recente.
+- **Skills relacionadas:** SKL-0002
+- **Referências:** nenhuma migration/commit de código (achado operacional).
+- **Confiança:** Alta (mensagem de erro exata capturada e confirmada)
 
 ## Registro rápido durante a tarefa
 

@@ -5,6 +5,45 @@
 > deploys verificados, testes reais). Antes disso, ver "Linha de base histórica" ao final —
 > reconstruída a partir do `git log`, sem acesso a decisões não documentadas em commit.
 
+## 2026-08-16T00:00:00+00:00 — Corrige entrega de `send_message` por telefone cru (DDI + 9º dígito) e descobre saldo Anthropic esgotado (v49-v52)
+
+- **Solicitação:** usuário reportou de novo "não está funcionando corretamente", com
+  print de 3 mensagens sobre agendamento de corte de cabelo mostradas como enviadas no
+  CRM mas nunca chegando no WhatsApp do destinatário (número "989992331897"). Depois
+  perguntou diretamente se era problema de conexão com o WhatsApp.
+- **Investigação:** `conversation_messages` mostrava as 3 mensagens com
+  `evolution_message_id: null` — Evolution nunca confirmou entrega, mas o CRM registrava
+  como enviada sem aviso nenhum ao usuário. 1ª causa encontrada: `to_phone` cru sem DDI
+  "55". Corrigido e retestado — ainda falhava. Causa raiz de verdade, achada via função
+  de debug temporária (`debug-check-number`, chamando `/chat/whatsappNumbers/{instance}`
+  da Evolution direto): o número tem conta WhatsApp registrada no formato ANTIGO, sem o
+  9º dígito moderno (JID real `559892331897`, não `5598992331897`). A Evolution aceitava
+  o envio pro número errado sem erro, e o código nunca conferia se o `evolution_message_id`
+  realmente veio antes de dizer "enviado".
+- **Alterações realizadas:** `to_phone` agora normaliza DDI sempre; nova função
+  `resolveDeliverableNumber()` consulta `/chat/whatsappNumbers/{instance}` antes de
+  enviar e usa o JID confirmado pela Evolution quando existe; `send_message` agora
+  retorna `delivered` (baseado em ter recebido `evolution_message_id` real), e o prompt
+  do Tettolino foi ajustado pra nunca afirmar sucesso quando `delivered: false`.
+- **Descoberta paralela (não é bug de código):** durante os testes, TODAS as mensagens
+  passaram a falhar com "Deu ruim aqui do meu lado", inclusive um simples "oi". Como
+  `get_logs` não expõe `console.error`, foi feito um deploy temporário (v51) que devolvia
+  o erro real na resposta pra diagnosticar, revelando: **"Your credit balance is too low
+  to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase
+  credits."** — o saldo da conta Anthropic esgotou. Deploy revertido ao texto genérico
+  limpo imediatamente (v52). **Ação exclusiva do usuário**: recarregar créditos em
+  console.anthropic.com → Plans & Billing.
+- **Arquivos afetados:** `supabase/functions/agent-whatsapp/index.ts`.
+- **Validação executada:** `deno check` seguiu em 24 erros (mesmo padrão pré-existente,
+  LES-0007), nenhum erro novo. Mecanismo de resolução de JID confirmado tecnicamente
+  correto via chamada direta à Evolution. Entrega ponta a ponta do fluxo completo ainda
+  **não confirmada** pós-fix porque o saldo da API esgotou no meio do teste — pendente
+  reconfirmação assim que a conta for recarregada.
+- **Impactos e compatibilidade:** função de debug temporária (`debug-check-number`) foi
+  neutralizada de volta pra stub 410 com `verify_jwt: true` (versão 3) antes do fim da
+  sessão — não deixada acessível em produção.
+- **Referência Git:** commit a ser criado nesta tarefa.
+
 ## 2026-08-15T02:32:00+00:00 — Corrige cliente "AM Consultoria" duplicado e telefone no cadastro errado (v48)
 
 - **Solicitação:** usuário pediu pra verificar se as imagens enviadas chegaram na

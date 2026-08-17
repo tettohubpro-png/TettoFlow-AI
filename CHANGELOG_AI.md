@@ -5,6 +5,16 @@
 > deploys verificados, testes reais). Antes disso, ver "Linha de base histórica" ao final —
 > reconstruída a partir do `git log`, sem acesso a decisões não documentadas em commit.
 
+## 2026-08-17T12:00:00+00:00 — Desliga webhook (bot fora do ar) + reset total de tarefas/operações a pedido do dono
+
+- **Contexto:** print mostrando o Tettolino travado em "Deu ruim aqui do meu lado" repetidamente numa conversa real de operação (edição de vídeo). Dono pediu, em duas mensagens separadas: (1) desligar o agente de IA e o bot até tudo estar corrigido; (2) apagar todas as tarefas e operações do CRM, mantendo só o cadastro de clientes, pra "começar praticamente do zero".
+- **Ação 1 — desligar o bot:** como o deploy do `agent-whatsapp` com a troca pra Groq está bloqueado (ver bloco anterior), desliguei o webhook da Evolution API (`enabled: false`, evento `MESSAGES_UPSERT` removido) via função de debug temporária — isso corta toda resposta automática (Tettolino + bot de cliente) sem desconectar o WhatsApp real (a agência continua podendo usar o número manualmente). Configuração original guardada pra religar depois. Função de debug neutralizada de volta a stub 410 em seguida.
+- **Ação 2 — reset de tarefas/operações:** confirmado com o dono via pergunta explícita (escopo: TODAS as 111 operações, incluindo as 2 já concluídas/publicadas; com backup antes). Levantamento prévio: 0 tarefas (tabela já vazia), 111 operações, 3 comentários de operação, 4 arquivos ligados a operação, 26 clientes. Backup completo (título, cliente, status, comentários, arquivos) salvo fora do banco antes de apagar. `files.operation_id` não tem `ON DELETE CASCADE` — desvinculado (não apagado) antes do DELETE de operations; todo o resto (operation_values, approvals, comments, history_entries, work_sessions, tasks.operation_id) cascateia automaticamente.
+- **Migration:** `20260817120000_reset_tarefas_e_operacoes_mantendo_clientes.sql`.
+- **Validação executada:** contagem pós-migration confirmada: 0 tasks, 0 operations, 0 operation_comments, 26 clients (intactos), 19 files (intactos, só desvinculados de operação).
+- **Impactos e compatibilidade:** ação irreversível no banco, mas com backup preservado fora dele. Bot desligado é reversível a qualquer momento (basta reativar o webhook) — não afeta o código nem os dados, só o gatilho automático.
+- **Referência Git:** commit a ser criado nesta tarefa (migration).
+
 ## 2026-08-16T00:00:00+00:00 — Corrige entrega de `send_message` por telefone cru (DDI + 9º dígito) e descobre saldo Anthropic esgotado (v49-v52)
 
 - **Solicitação:** usuário reportou de novo "não está funcionando corretamente", com

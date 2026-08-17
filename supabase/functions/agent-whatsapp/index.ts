@@ -1507,6 +1507,157 @@ async function callClaudeMessages(
   return body
 }
 
+// Converte o histórico de mensagens no formato Anthropic (o formato "canônico"
+// usado internamente por runHermesAgentLoop, com blocks type:'text'/'tool_use'/
+// 'tool_result') pro formato OpenAI-compatible que a Groq espera (tool_calls no
+// assistant, uma mensagem role:'tool' por resultado). Existe só pra alimentar
+// callGroqAgentMessages — o estado interno do loop nunca muda de formato.
+function anthropicMessagesToOpenAI(
+  system: string,
+  messages: Array<Record<string, unknown>>,
+): Array<Record<string, unknown>> {
+  const out: Array<Record<string, unknown>> = [{ role: 'system', content: system }]
+  for (const msg of messages) {
+    const role = msg.role as string
+    const content = msg.content
+    if (typeof content === 'string') {
+      out.push({ role, content })
+      continue
+    }
+    if (!Array.isArray(content)) {
+      out.push({ role, content: String(content ?? '') })
+      continue
+    }
+    if (role === 'assistant') {
+      const textBlock = content.find((b) => (b as Record<string, unknown>).type === 'text') as
+        | { text: string }
+        | undefined
+      const toolUseBlocks = content.filter((b) => (b as Record<string, unknown>).type === 'tool_use') as Array<{
+        id: string
+        name: string
+        input: Record<string, unknown>
+      }>
+      const assistantMsg: Record<string, unknown> = { role: 'assistant', content: textBlock?.text ?? null }
+      if (toolUseBlocks.length > 0) {
+        assistantMsg.tool_calls = toolUseBlocks.map((b) => ({
+          id: b.id,
+          type: 'function',
+          function: { name: b.name, arguments: JSON.stringify(b.input ?? {}) },
+        }))
+      }
+      out.push(assistantMsg)
+    } else {
+      // role 'user' com blocks tool_result — cada um vira uma mensagem role:'tool'.
+      const toolResults = content.filter((b) => (b as Record<string, unknown>).type === 'tool_result') as Array<{
+        tool_use_id: string
+        content: string
+        is_error?: boolean
+      }>
+      for (const tr of toolResults) {
+        out.push({
+          role: 'tool',
+          tool_call_id: tr.tool_use_id,
+          content: typeof tr.content === 'string' ? tr.content : JSON.stringify(tr.content),
+        })
+      }
+      const otherText = content
+        .filter((b) => (b as Record<string, unknown>).type === 'text')
+        .map((b) => (b as { text: string }).text)
+        .join('\n')
+      if (otherText) out.push({ role: 'user', content: otherText })
+    }
+  }
+  return out
+}
+
+function anthropicToolsToOpenAI(tools: unknown[]): Array<Record<string, unknown>> {
+  return (tools as Array<{ name: string; description: string; input_schema: unknown }>).map((t) => ({
+    type: 'function',
+    function: { name: t.name, description: t.description, parameters: t.input_schema },
+  }))
+}
+
+/**
+ * Cérebro principal do Tettolino, rodando em cima da Groq (llama-3.3-70b-versatile)
+ * em vez do Claude — trocado porque a conta Anthropic ficou sem crédito (ver
+ * LES-0016) e o dono pediu explicitamente pra rodar em cima de um modelo que já
+ * tem infra própria funcionando (a Groq já é usada pra outras coisas no projeto).
+ * Devolve o MESMO formato de callClaudeMessages (stop_reason + content blocks
+ * estilo Anthropic) pra runHermesAgentLoop não precisar saber qual provedor
+ * respondeu.
+ */
+async function callGroqAgentMessages(
+  apiKey: string,
+  system: string,
+  tools: unknown[],
+  messages: unknown[],
+): Promise<{ stop_reason: string; content: Array<Record<string, unknown>> }> {
+  const res = await fetchWithTimeout(
+    'https://api.groq.com/openai/v1/chat/completions',
+    {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'llama-3.3-70b-versatile',
+        max_tokens: 2048,
+        temperature: 0.2,
+        messages: anthropicMessagesToOpenAI(system, messages as Array<Record<string, unknown>>),
+        tools: anthropicToolsToOpenAI(tools),
+        tool_choice: 'auto',
+      }),
+    },
+    15000,
+  )
+  const body = await res.json()
+  if (!res.ok) {
+    console.error('Groq agent API error', body)
+    throw new Error(body?.error?.message || `Groq API error ${res.status}`)
+  }
+  const message = body?.choices?.[0]?.message ?? {}
+  const toolCalls = Array.isArray(message.tool_calls) ? message.tool_calls : []
+  const content: Array<Record<string, unknown>> = []
+  if (typeof message.content === 'string' && message.content.trim()) {
+    content.push({ type: 'text', text: message.content })
+  }
+  for (const tc of toolCalls) {
+    let input: Record<string, unknown> = {}
+    try {
+      input = JSON.parse(tc?.function?.arguments || '{}')
+    } catch {
+      input = {}
+    }
+    content.push({ type: 'tool_use', id: tc.id, name: tc?.function?.name, input })
+  }
+  return { stop_reason: toolCalls.length > 0 ? 'tool_use' : 'end_turn', content }
+}
+
+/**
+ * Ponto único de escolha do cérebro do Tettolino: Groq primeiro (rápida, com
+ * camada gratuita, é o padrão atual), Claude como fallback só se a Groq falhar
+ * E existir chave da Anthropic configurada. Se nenhuma chave existir, ou se
+ * ambas falharem, propaga o erro (runHermesAgentLoop deixa o catch de
+ * handleHermesMessage virar a resposta genérica de erro pro usuário).
+ */
+async function callAgentBrain(
+  keys: { groqKey?: string; anthropicKey?: string },
+  system: string,
+  tools: unknown[],
+  messages: unknown[],
+): Promise<{ stop_reason: string; content: Array<Record<string, unknown>> }> {
+  if (keys.groqKey) {
+    try {
+      return await callGroqAgentMessages(keys.groqKey, system, tools, messages)
+    } catch (err) {
+      console.error('callGroqAgentMessages falhou, tentando fallback', err)
+      if (!keys.anthropicKey) throw err
+    }
+  }
+  if (keys.anthropicKey) {
+    return await callClaudeMessages(keys.anthropicKey, system, tools, messages)
+  }
+  throw new Error('Nenhuma chave de IA configurada (GROQ_API_KEY / ANTHROPIC_API_KEY).')
+}
+
 async function resolveOperator(
   supabase: ReturnType<typeof createClient>,
   phone: string,
@@ -2423,7 +2574,7 @@ async function persistHermesTurn(
 
 async function runHermesAgentLoop(
   supabase: ReturnType<typeof createClient>,
-  apiKey: string,
+  keys: { groqKey?: string; anthropicKey?: string },
   workspaceId: string,
   operator: { id: string; name: string; role: string },
   actorPhone: string,
@@ -2444,8 +2595,8 @@ async function runHermesAgentLoop(
   let staged = false
 
   for (let iteration = 0; iteration < 4; iteration++) {
-    const response = await callClaudeMessages(
-      apiKey,
+    const response = await callAgentBrain(
+      keys,
       hermesSystemPrompt(operator.name, operator.role),
       HERMES_TOOLS,
       messages,
@@ -2688,7 +2839,11 @@ async function handleHermesMessage(
     return { reply: ackReply, hermes: true, actor_user_id: operator.id, media_queued: true }
   }
 
-  const apiKey = Deno.env.get('ANTHROPIC_API_KEY')
+  // Groq é o cérebro principal (rápida, tem camada gratuita); Claude só entra
+  // como fallback se a Groq falhar E a conta Anthropic tiver crédito (ver
+  // LES-0016 — hoje não tem, mas mantém o caminho pronto pra quando tiver).
+  const groqKey = Deno.env.get('GROQ_API_KEY')
+  const anthropicKey = Deno.env.get('ANTHROPIC_API_KEY')
 
   // Se tem ação pendente mas a mensagem nova não é claramente sim/não, NÃO
   // trava a conversa pedindo confirmação de novo pra sempre (bug real: 4
@@ -2712,7 +2867,7 @@ async function handleHermesMessage(
       pendingToResolve,
       payload.message,
     )
-  } else if (!apiKey) {
+  } else if (!groqKey && !anthropicKey) {
     reply = 'Tettolino ainda não está configurado (falta a chave da IA). Avisa o time técnico.'
   } else {
     try {
@@ -2720,7 +2875,7 @@ async function handleHermesMessage(
       const mediaContext = await resolveOperatorMediaContext(supabase, operator.id, payload, instance)
       reply = await runHermesAgentLoop(
         supabase,
-        apiKey,
+        { groqKey, anthropicKey },
         workspaceId,
         { ...operator, role },
         payload.phone,

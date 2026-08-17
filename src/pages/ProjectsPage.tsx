@@ -207,7 +207,7 @@ export function ProjectsPage() {
             onClick={() => setCreateOpen(true)}
             className="min-h-11 w-full rounded-lg bg-emerald-600 px-4 py-2.5 text-sm font-medium hover:bg-emerald-500 sm:w-auto"
           >
-            Solicitação
+            Nova tarefa
           </button>
         )}
       </header>

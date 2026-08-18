@@ -1,4 +1,4 @@
-import { createClient } from '@supabase/supabase-js'
+import type { SupabaseClientType } from '@/lib/supabase'
 
 /**
  * ComplianceLogger — Auditoria centralizada para ADR-001 e ADR-002
@@ -21,9 +21,9 @@ export interface AuditLogEntry {
 }
 
 export class ComplianceLogger {
-  private supabase: ReturnType<typeof createClient>
+  private supabase: SupabaseClientType
 
-  constructor(supabaseClient: ReturnType<typeof createClient>) {
+  constructor(supabaseClient: SupabaseClientType) {
     this.supabase = supabaseClient
   }
 

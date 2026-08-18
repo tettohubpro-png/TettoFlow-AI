@@ -186,7 +186,7 @@ export function classifyAuthError(error: any): ErrorContext {
 /**
  * Handler genérico para catch blocks
  */
-export function handleError(error: unknown, context?: string): StructuredError {
+export function handleError(error: unknown, _context?: string): StructuredError {
   // Se já é StructuredError, retorna
   if (error instanceof StructuredError) {
     return error

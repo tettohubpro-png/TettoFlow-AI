@@ -1,5 +1,5 @@
 import { useCallback, useState } from 'react'
-import { StructuredError, handleError, type ErrorContext } from '@/services/errorHandler'
+import { StructuredError, handleError } from '@/services/errorHandler'
 
 /**
  * Hook para gerenciar erros estruturados em componentes

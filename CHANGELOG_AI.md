@@ -5,6 +5,16 @@
 > deploys verificados, testes reais). Antes disso, ver "Linha de base histórica" ao final —
 > reconstruída a partir do `git log`, sem acesso a decisões não documentadas em commit.
 
+## 2026-08-18T00:00:00+00:00 — Corrige build quebrado na `main` (12 erros de TypeScript) + confirma stack de deploy real (Vercel)
+
+- **Contexto:** dono sem dinheiro pra recarregar a Anthropic, pediu ajuda com as próximas demandas. Aproveitei pra investigar a fundo o alerta que eu mesmo tinha levantado no fechamento anterior: erros de `tsc -b` na `main`, possivelmente bloqueando todo deploy novo no Vercel.
+- **Descoberta adicional:** confirmado via README que a produção real roda no **Vercel** (não Netlify — `netlify.toml` é só alternativa documentada, não usada).
+- **Investigação:** inicialmente suspeitei de drift de versão do `@supabase/supabase-js` (main resolvia 2.111.0, a branch de trabalho resolvia 2.109.0) — testei baixar a versão e o erro persistiu idêntico, descartando essa hipótese. Causa real, confirmada: (1) `ComplianceLogger` tipava seu client como `ReturnType<typeof createClient>` recalculado do zero — `createClient` tem mais de uma sobrecarga e `ReturnType<>` nessas resolve pra ÚLTIMA sobrecarga da lib, que não bate estruturalmente com o client de fato instanciado em `lib/supabase.ts` (mesma instância em runtime, tipos diferentes em compile-time); (2) `rlsIsolation.test.ts` (arquivo de teste Vitest) estava incluído no `tsconfig.app.json` do app, sem exclude pra `*.test.ts`, então um arquivo de teste travava o build de produção.
+- **Alterações realizadas (branch `fix/corrige-erros-build-compliance`, a partir de `main`):** `lib/supabase.ts` exporta `SupabaseClientType = typeof supabase`; `ComplianceLogger` usa esse tipo em vez de recalcular via `ReturnType<>`; `tsconfig.app.json` ganhou `exclude` pra `*.test.ts`/`*.test.tsx`; 2 limpezas triviais de variável/import não utilizado.
+- **Validação executada:** `npm run build` limpo (0 erros), com a MESMA versão de dependência já presente no lockfile da main (2.111.0) — não foi downgrade, só correção de tipo.
+- **Impactos e compatibilidade:** PR aberto, aguardando merge do dono (push direto em `main` é bloqueado pelo classificador de permissão da sessão). Enquanto não mesclado, incerto se o Vercel está de fato falhando builds novos desde o commit que introduziu o problema — não tenho acesso ao painel do Vercel pra confirmar.
+- **Referência Git:** branch `fix/corrige-erros-build-compliance` (commit `eb1bd03`), a partir de `origin/main`. PR ainda não criado/mesclado.
+
 ## 2026-08-17T12:00:00+00:00 — Desliga webhook (bot fora do ar) + reset total de tarefas/operações a pedido do dono
 
 - **Contexto:** print mostrando o Tettolino travado em "Deu ruim aqui do meu lado" repetidamente numa conversa real de operação (edição de vídeo). Dono pediu, em duas mensagens separadas: (1) desligar o agente de IA e o bot até tudo estar corrigido; (2) apagar todas as tarefas e operações do CRM, mantendo só o cadastro de clientes, pra "começar praticamente do zero".

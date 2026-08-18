@@ -633,6 +633,73 @@
 - **Referências:** nenhuma migration/commit de código (achado operacional).
 - **Confiança:** Alta (mensagem de erro exata capturada e confirmada)
 
+### LES-0017 — `ReturnType<typeof createClient>` recalculado não bate com o client real (build quebrado)
+- **Status:** Vigente
+- **Tipo:** Erro
+- **Severidade:** Alta (bloqueava build de produção inteiro, se o Vercel de fato falha nesse cenário)
+- **Área/módulo:** frontend — `src/services/complianceLogger.ts`, `src/lib/supabase.ts`
+- **Primeira ocorrência:** commits de compliance/RLS (ADR-001/002) em `main`, fora desta sessão
+- **Última validação:** 2026-08-18
+- **Sintoma:** `npm run build` (= `tsc -b && vite build`) falhava com 12 erros, incluindo
+  `SupabaseClient<...> não é atribuível a SupabaseClient<...>` mesmo sendo,
+  em runtime, o MESMO objeto client passado adiante.
+- **Causa raiz:** `ComplianceLogger` tipava seu parâmetro de client como
+  `ReturnType<typeof createClient>`, recalculado a partir da função
+  importada. `createClient` do `@supabase/supabase-js` tem mais de uma
+  sobrecarga — `ReturnType<>` aplicado a uma função sobrecarregada sempre
+  resolve pra ÚLTIMA sobrecarga declarada na lib (a mais nova/estrita),
+  não necessariamente a que foi de fato usada na chamada real em
+  `lib/supabase.ts`. Resultado: dois tipos estruturalmente diferentes pro
+  mesmo client, incompatíveis pro TypeScript mesmo sendo idênticos em
+  runtime. **Hipótese inicial errada, descartada com teste real:** achei
+  que fosse drift de versão da lib entre branches (2.109 vs 2.111) —
+  baixei a versão e o erro persistiu idêntico, provando que não era isso.
+- **Solução aplicada:** exportar o tipo derivado da INSTÂNCIA real
+  (`export type SupabaseClientType = typeof supabase`, em `lib/supabase.ts`)
+  e usar esse tipo em qualquer lugar que precise aceitar o client — nunca
+  recalcular via `ReturnType<typeof createClient>` de novo.
+- **Validação da solução:** `npm run build` limpo, 0 erros, mesma versão
+  de dependência do lockfile original (não foi downgrade).
+- **Regra preventiva:** ao tipar um parâmetro que recebe um client/objeto
+  já instanciado em outro módulo, sempre derive o tipo com `typeof
+  <instância real>` importado daquele módulo — nunca recrie o tipo
+  chamando `ReturnType<typeof factoryFunction>` de novo, especialmente se
+  a factory function tiver múltiplas sobrecargas (comum em SDKs como
+  Supabase, Stripe, etc.).
+- **Quando esta regra se aplica:** qualquer serviço/classe que recebe um
+  client de SDK externo via injeção de dependência (padrão comum em
+  loggers, wrappers, adapters).
+- **Skills relacionadas:** SKL-0002
+- **Referências:** branch `fix/corrige-erros-build-compliance`, commit `eb1bd03`.
+- **Confiança:** Alta (build local limpo confirmado; impacto real no Vercel
+  não confirmado por falta de acesso ao painel)
+
+### LES-0018 — Arquivo de teste Vitest incluído no tsconfig do app trava o build de produção
+- **Status:** Vigente
+- **Tipo:** Erro
+- **Severidade:** Média
+- **Área/módulo:** frontend — `tsconfig.app.json`, `src/services/rlsIsolation.test.ts`
+- **Primeira ocorrência:** commits de compliance/RLS em `main`, fora desta sessão
+- **Última validação:** 2026-08-18
+- **Sintoma:** erros de TypeScript vindos de um arquivo `*.test.ts`
+  apareciam no `tsc -b` do build de PRODUÇÃO (não só ao rodar os testes).
+- **Causa raiz:** `tsconfig.app.json` tinha `"include": ["src"]` sem
+  nenhum `exclude` pra `*.test.ts`/`*.test.tsx` — arquivos de teste ficam
+  misturados com código de app dentro de `src/`, então o compilador do
+  build de produção type-checava o teste junto.
+- **Solução aplicada:** adicionado `"exclude": ["src/**/*.test.ts",
+  "src/**/*.test.tsx"]` em `tsconfig.app.json`.
+- **Validação da solução:** `npm run build` limpo depois da mudança.
+- **Regra preventiva:** sempre que criar o primeiro arquivo de teste
+  dentro de `src/` num projeto Vite, confirmar que o `tsconfig` do BUILD
+  (não o de testes, se houver um separado) exclui `*.test.*` — senão todo
+  erro de tipo em teste vira bloqueio de deploy.
+- **Quando esta regra se aplica:** qualquer projeto Vite/React que
+  começa a adicionar testes Vitest colocados dentro de `src/`.
+- **Skills relacionadas:** SKL-0002
+- **Referências:** branch `fix/corrige-erros-build-compliance`, commit `eb1bd03`.
+- **Confiança:** Alta
+
 ## Registro rápido durante a tarefa
 
 Nenhuma lição em status `Em investigação` no momento desta linha de base.

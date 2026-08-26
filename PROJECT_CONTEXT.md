@@ -3,7 +3,7 @@
 ## Metadados
 - Projeto: TettoFlow AI OS (produto interno da agência TettoHub)
 - Repositório: `tettohubpro-png/TettoFlow-AI` (GitHub, remote `origin`)
-- Última atualização: 2026-08-14T13:58:00+00:00
+- Última atualização: 2026-08-26T17:35:00+00:00
 - Branch de referência: `claude/vps-access-connection-z05wyj` — ver Pendência #0 sobre
   divergência com `main`
 - Status geral: em produção, uso ativo diário pela agência (não é protótipo)
@@ -106,9 +106,21 @@ equipe.
   — código já existe e falha graciosamente (retorna `null`) até existir.
 - **Supabase** — Postgres + Auth + Realtime + Storage + `pg_cron`/`pg_net` (extensão
   `pg_net` está no schema `public`, advisor de segurança recomenda mover — não corrigido).
-- **Deploy do frontend**: Vercel (produção atual, segundo README). Há `netlify.toml` como
-  alternativa documentada, não confirmado se ainda relevante. Migração planejada pro
-  README: Vercel → Coolify self-hosted — **não verificado se já aconteceu**.
+- **Deploy do frontend**: **self-hosted na própria VPS** (confirmado em 2026-08-26) —
+  `systemd` (`tettoflow-crm.service`, roda `serve -s dist -l 8081`) + nginx fazendo proxy
+  em `crm.agenciatettohub.com.br` (domínio registrado no nome do dono, DNS já aponta pro
+  IP da VPS, certificado Let's Encrypt válido). **Não usa mais Vercel nem Netlify** —
+  havia um projeto órfão na Vercel (`tettoflow-ai.vercel.app`, desconectado do GitHub
+  desde antes desta sessão) que foi apagado em 2026-08-26 pra eliminar a confusão. O
+  `netlify.toml` no repo é resquício não usado; `vercel.json` idem. Ver LES-0019.
+  Build do `dist/` é feito manualmente na própria VPS (`npm run build`), não é versionado
+  no Git (`dist/` está no `.gitignore`) — não há CI/CD automático (`.github/workflows`
+  não existe em nenhum dos dois repositórios desta VPS).
+- **Outros projetos na mesma VPS** (contexto de infraestrutura compartilhada, fora do
+  escopo deste repositório): a VPS também hospeda o site/painel **AM Consultoria**
+  (`amconsultoriama.com.br`, repo `Am-Consultoria-tt`, serviço `admin-api.service`,
+  self-hosted igual ao TettoFlow-AI). Detalhes desse outro projeto não pertencem a este
+  `PROJECT_CONTEXT.md` — só citado aqui porque compartilha o mesmo servidor.
 
 ## Estrutura relevante do repositório
 ```

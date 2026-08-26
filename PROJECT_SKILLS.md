@@ -27,6 +27,7 @@ não é opcional.
 | Investigar bug reportado pelo usuário | SKL-0002, SKL-0006 | — | `PROJECT_LESSONS.md` completo | reprodução real via `curl`/webhook simulado antes de declarar corrigido |
 | Nova integração externa (API de terceiro) | SKL-0008 | — | LES-0008 | confirmar tier/plano exigido nos docs oficiais ANTES de prometer automação |
 | Publicar alteração (commit/push) | SKL-0006 | — | — | `git status` limpo, diff revisado, push confirmado |
+| Infra/DevOps na VPS (DNS, nginx, certbot, chave SSH, conta de terceiro tipo Vercel/DigitalOcean) | SKL-0009 | — | LES-0019, LES-0020 | `whois` + `nslookup` público + `curl -I` batendo IP real antes de declarar "produção confirmada"; mudanças de root/chave feitas pelo usuário numa sessão local, não pelo agente |
 
 ## Catálogo
 
@@ -151,6 +152,24 @@ não é opcional.
   a parte viável (ex: cópia+rename) e deixar claro o que ficou de fora e por quê.
 - **Lições relacionadas:** LES-0008
 - **Última verificação:** 2026-08-14
+
+### SKL-0009 — Infraestrutura/DevOps na VPS de produção (DNS, nginx, certbot, chaves SSH, contas de terceiro)
+- **Status:** Disponível (com ressalva de fluxo — ver abaixo)
+- **Categoria:** Infraestrutura
+- **Obrigatoriedade:** Por gatilho (qualquer tarefa que toque domínio, certificado,
+  configuração de nginx/systemd, ou credencial Git/SSH na VPS)
+- **Finalidade:** confirmar de forma confiável onde a produção realmente roda (não só o
+  que a documentação diz) e corrigir configuração de servidor com segurança.
+- **Como validar o uso correto:** protocolo de 3 passos (ver LES-0019) — `whois` do
+  domínio, `nslookup <domínio> 8.8.8.8` (resolver público), `curl -I` comparando o IP de
+  resposta com o IP da VPS — antes de declarar qualquer coisa como "produção confirmada".
+- **Restrição de fluxo (ver LES-0020):** o classificador de auto mode do Claude Code
+  bloqueia `ssh-keygen`, leitura de `.ssh`, e `sudo` em config de sistema — mesmo com
+  autorização explícita do usuário e sudo sem senha liberado. Nessas ações, o agente
+  prepara o comando exato e o **usuário roda numa sessão de terminal local** (ex: Windows
+  Terminal com Claude Code conectado por SSH na VPS), colando o resultado de volta.
+- **Lições relacionadas:** LES-0019, LES-0020
+- **Última verificação:** 2026-08-26
 
 ## Skills necessárias, mas não confirmadas/indisponíveis nesta sessão
 

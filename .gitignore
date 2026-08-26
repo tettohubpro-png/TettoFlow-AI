@@ -9,3 +9,5 @@ supabase/.temp
 supabase/.branches
 .vercel
 .env*
+.mcp.json
+deno.lock

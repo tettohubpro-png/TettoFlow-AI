@@ -6,16 +6,13 @@ import { ForgotPasswordPage } from '@/pages/ForgotPasswordPage'
 import { ResetPasswordPage } from '@/pages/ResetPasswordPage'
 import { DashboardPage } from '@/pages/DashboardPage'
 import { CrmPage } from '@/pages/CrmPage'
-import { ComercialPage } from '@/pages/ComercialPage'
 import { ClientBriefingPage } from '@/pages/ClientBriefingPage'
 import { ProjectsPage } from '@/pages/ProjectsPage'
-import { ContentPage } from '@/pages/ContentPage'
 import { AgendaPage } from '@/pages/AgendaPage'
 import { TeamPage } from '@/pages/TeamPage'
 import { DepartmentsPage } from '@/pages/DepartmentsPage'
 import { ApprovalsPage } from '@/pages/ApprovalsPage'
 import { AiPage } from '@/pages/AiPage'
-import { WhatsAppPage } from '@/pages/WhatsAppPage'
 import { InboxPage } from '@/pages/InboxPage'
 import { FinancePage } from '@/pages/FinancePage'
 import { AlertsPage } from '@/pages/AlertsPage'
@@ -38,8 +35,8 @@ export default function App() {
             <Route index element={<DashboardPage />} />
             <Route path="crm" element={<CrmPage />} />
             <Route path="crm/:clientId" element={<ClientBriefingPage />} />
-            <Route path="comercial" element={<ComercialPage />} />
-            <Route path="conteudo" element={<ContentPage />} />
+            <Route path="comercial" element={<Navigate to="/crm" replace />} />
+            <Route path="conteudo" element={<Navigate to="/tarefas" replace />} />
             <Route path="agenda" element={<AgendaPage />} />
             <Route path="equipe" element={<TeamPage />} />
             <Route path="projetos" element={<Navigate to="/tarefas" replace />} />
@@ -48,7 +45,7 @@ export default function App() {
             <Route path="alertas" element={<AlertsPage />} />
             <Route path="relatorios" element={<ReportsPage />} />
             <Route path="ia" element={<AiPage />} />
-            <Route path="whatsapp" element={<WhatsAppPage />} />
+            <Route path="whatsapp" element={<Navigate to="/mensagens" replace />} />
             <Route path="mensagens" element={<InboxPage />} />
             <Route path="financeiro" element={<FinancePage />} />
             <Route path="tarefas" element={<ProjectsPage />} />

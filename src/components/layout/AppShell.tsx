@@ -3,10 +3,8 @@ import { NavLink, Outlet, useLocation, Link } from 'react-router-dom'
 import {
   Home,
   Users,
-  CalendarDays,
   CheckSquare,
   Wallet,
-  Target,
   Calendar,
   UsersRound,
   Building2,
@@ -15,7 +13,6 @@ import {
   BarChart3,
   Sparkles,
   MessageCircle,
-  Inbox,
   Gift,
   Newspaper,
   LifeBuoy,
@@ -43,11 +40,10 @@ interface NavItem {
 
 const primaryNav: NavItem[] = [
   { to: '/', label: 'Início', icon: Home, end: true },
+  { to: '/mensagens', label: 'WhatsApp', icon: MessageCircle },
   { to: '/crm', label: 'Clientes', icon: Users },
-  { to: '/conteudo', label: 'Conteúdo', icon: CalendarDays },
   { to: '/tarefas', label: 'Tarefas', icon: CheckSquare },
   { to: '/financeiro', label: 'Financeiro', icon: Wallet },
-  { to: '/comercial', label: 'CRM', icon: Target },
   { to: '/agenda', label: 'Agenda', icon: Calendar },
   { to: '/equipe', label: 'Equipe', icon: UsersRound },
 ]
@@ -58,8 +54,6 @@ const tettoNav: NavItem[] = [
   { to: '/alertas', label: 'Alertas', icon: BellRing },
   { to: '/relatorios', label: 'Relatórios', icon: BarChart3 },
   { to: '/ia', label: 'IA', icon: Sparkles },
-  { to: '/whatsapp', label: 'WhatsApp IA', icon: MessageCircle },
-  { to: '/mensagens', label: 'Mensagens', icon: Inbox },
 ]
 
 const accountNav: NavItem[] = [
@@ -73,8 +67,8 @@ const accountNav: NavItem[] = [
 const bottomNav: { to: string; label: string; end?: boolean; more?: boolean }[] = [
   { to: '/', label: 'Início', end: true },
   { to: '/crm', label: 'Clientes' },
-  { to: '/conteudo', label: 'Conteúdo' },
   { to: '/tarefas', label: 'Tarefas' },
+  { to: '/equipe', label: 'Equipe' },
   { to: '#mais', label: 'Mais', more: true },
 ]
 

@@ -4,7 +4,7 @@ Sistema operacional interno da TettoHub — CRM, projetos, atendimento IA e dash
 
 ## Stack
 
-React + Vite + TypeScript + TailwindCSS · Supabase · Claude · n8n · Evolution API · Netlify
+React + Vite + TypeScript + TailwindCSS · Supabase · Claude · n8n · Evolution API · Vercel
 
 ## Setup rápido
 
@@ -44,9 +44,11 @@ supabase functions deploy whatsapp-webhook
 
 Importe `n8n/workflows/whatsapp-ai.json` e configure variáveis `SUPABASE_URL` e `SUPABASE_ANON_KEY`.
 
-### 5. Deploy Netlify
+### 5. Deploy
 
-Conecte o repositório — `netlify.toml` já configurado.
+Produção atual: **Vercel** (`vercel.json` já configurado — rewrite de SPA). Conecte o repositório na Vercel; o build (`npm run build`, saída em `dist/`) é detectado automaticamente pelo Vite.
+
+Há também um `netlify.toml` no repo como alternativa documentada — não é o que está em produção hoje. Migração planejada: Vercel → Coolify (self-hosted, mesma VPS da Evolution API).
 
 ## Módulos Fase 0
 

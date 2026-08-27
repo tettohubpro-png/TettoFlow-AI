@@ -41,7 +41,7 @@ describe('aiContext', () => {
     const { context, snippets } = buildAiContext(
       'AM Consultoria',
       memories,
-      [{ title: 'Post Instagram', status: 'PRODUCTION' }],
+      [{ title: 'Post Instagram', status: 'IN_PROGRESS' }],
       'identidade',
     )
     expect(context).toContain('AM Consultoria')

@@ -46,7 +46,7 @@ describe('generateContextualReply', () => {
       clientName: 'AM Consultoria',
       message: 'Qual o status da operação?',
       memories,
-      operations: [{ title: 'Post Instagram teste', status: 'PRODUCTION' }],
+      operations: [{ title: 'Post Instagram teste', status: 'IN_PROGRESS' }],
     })
     expect(r.reply).toContain('Post Instagram teste')
   })

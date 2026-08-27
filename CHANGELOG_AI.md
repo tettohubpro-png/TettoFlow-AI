@@ -5,6 +5,42 @@
 > deploys verificados, testes reais). Antes disso, ver "Linha de base histórica" ao final —
 > reconstruída a partir do `git log`, sem acesso a decisões não documentadas em commit.
 
+## 2026-08-27T01:00:00+00:00 — Fecha as 3 pendências do refactor de status: testes, `dist-preview/`, migration de baseline — e descobre bug real no Kanban
+
+- **Contexto:** continuação direta da entrada anterior (mesma sessão, dono pediu "vamos
+  seguir o trabalho local"). As 3 pendências que tinham ficado em aberto por decisão do
+  usuário na rodada anterior.
+- **1) Testes:** `aiReply.test.ts`/`aiContext.test.ts` trocaram a fixture stale
+  `'PRODUCTION'` por `'IN_PROGRESS'` — só cosmético, o valor não era comparado contra nada
+  no teste (só interpolado em texto), então não tinha risco.
+- **2) `dist-preview/`:** apagado do disco (era build manual de 940KB, sem referência em
+  nenhum script/config, mais antigo que o build atual) e adicionado ao `.gitignore` junto
+  de `dist`.
+- **3) Migration de baseline:** antes de escrever, consultei o Postgres real via MCP
+  (`pg_constraint`, `pg_indexes`, `pg_policies`, `pg_trigger`) pra não reconstruir de
+  memória. Descoberta: existe uma trigger `trg_operations_status_step` (função
+  `enforce_operation_status_step`) que só permite mover `operations.status` 1 etapa por
+  vez na ordem `NEW→IN_PROGRESS→APPROVAL→REVISION→DONE`, com `DONE` terminal. Escrevi
+  `supabase/migrations/20260827190000_baseline_operation_status_pipeline.sql` (idempotente,
+  `CREATE TYPE` guardado por exceção + `CREATE OR REPLACE FUNCTION` + `DROP/CREATE
+  TRIGGER`), apliquei via `apply_migration` (retornou `success: true`, sem erro — os
+  objetos já existiam) e confirmei a trigger reaplicada com definição idêntica à original
+  via `pg_get_triggerdef`. Escopo deliberadamente contido: só os 2 enums
+  (`operation_status`, `operation_priority`) e a trigger — a tabela `operations` em si e o
+  schema `workspaces`-centro maior continuam sem baseline local (Pendência #6).
+- **Achado lateral (bug real, não corrigido nesta rodada):** ao ler a trigger, percebi que
+  o Kanban de Tarefas (`ProjectsPage.tsx`) renderiza as 5 colunas de status e deixa soltar
+  um card arrastado em qualquer uma delas, sem checar adjacência — `handleColumnDrop` →
+  `moveToStatus` → `updateStatus` manda a mudança pro Postgres sem validar. Se o drop pular
+  2+ colunas, a trigger acima rejeita a transição, mas `moveToStatus` nunca lê o
+  `{ error }` que `updateStatus` devolve — o card simplesmente não se move, sem nenhum
+  aviso ao usuário. **Não reproduzido via UI real nesta sessão** (achado por leitura de
+  código), registrado como `PROJECT_LESSONS.md` LES-0022 e Pendência #7 pra próxima
+  sessão decidir se corrige.
+- **Validação executada:** `npm run build` limpo, `npm test` 25/25, migration aplicada e
+  trigger reconferida byte a byte contra a definição original.
+- **Referência Git:** commit `d08b8c0`.
+
 ## 2026-08-27T00:00:00+00:00 — Simplifica pipeline de status de operação (9→5 estados) + descobre drift de migration em `operations`
 
 - **Contexto:** sessão retomou 13 arquivos de frontend já modificados (não commitados) por

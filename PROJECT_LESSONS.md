@@ -25,6 +25,7 @@
 | LES-0015 | send_message — número sem DDI/9º dígito | Erro | to_phone cru era mandado sem normalizar; número com 9º dígito não batia com conta registrada no formato antigo, e a Evolution "aceitava" sem nunca entregar | Vigente | 2026-08-16 |
 | LES-0016 | Anthropic API — saldo esgotado | Incidente | Todo o Tettolino parou de responder ("Deu ruim" pra qualquer mensagem, até "oi") porque a conta Anthropic ficou sem crédito — sintoma idêntico a um bug de código, mas era financeiro | Vigente | 2026-08-16 |
 | LES-0021 | Schema `operations`/`workspaces` — drift de migration | Descoberta | Enum `operation_status` (e boa parte do schema workspace-centric) existe e foi alterado direto no Postgres de produção, sem nenhum arquivo espelhado em `supabase/migrations/` | Vigente | 2026-08-27 |
+| LES-0022 | Kanban de Tarefas (`ProjectsPage`) — drag-and-drop | Erro | Trigger `enforce_operation_status_step` só permite mover status 1 etapa por vez; o Kanban deixa soltar em qualquer coluna e descarta o erro em silêncio | Vigente | 2026-08-27 |
 
 ## Regras preventivas consolidadas
 
@@ -834,6 +835,71 @@
   (branch `main` divergente) e riscos de `README.md`/`DOCUMENTATION/` desatualizados —
   mesmo padrão de "documentação/histórico não bate com a realidade do banco".
 - **Confiança:** Alta (confirmado direto na fonte, não inferido)
+
+### LES-0022 — Kanban de Tarefas deixa arrastar card pra qualquer coluna, mas o banco só aceita transição de 1 etapa — erro cai em silêncio
+- **Status:** Vigente
+- **Tipo:** Erro
+- **Severidade:** Média (não corrompe dado — a trigger do banco protege a
+  integridade — mas gera confusão real de UX: o usuário arrasta, o card
+  "não vai", e nada explica por quê)
+- **Área/módulo:** `src/pages/ProjectsPage.tsx` (`moveToStatus`,
+  `handleColumnDrop`), `src/hooks/useOperations.ts` (`updateStatus`),
+  trigger `trg_operations_status_step` / função
+  `enforce_operation_status_step()` no Postgres.
+- **Primeira ocorrência:** não determinada (o Kanban de 5 colunas e a
+  trigger provavelmente coexistem desde a criação de ambos); descoberta
+  nesta sessão, 2026-08-27, ao ler a definição da trigger pra escrever a
+  migration de baseline do LES-0021.
+- **Última validação:** 2026-08-27 (lida a definição da trigger e o código
+  do Kanban; **não reproduzido via UI real nesta sessão** — achado por
+  leitura de código, não por teste ponta a ponta).
+- **Sintoma esperado:** arrastar um card de uma coluna do Kanban pra outra
+  que não seja imediatamente adjacente (ex: de "Nova tarefa" direto pra
+  "Concluído") não move o card e não mostra nenhum erro/toast — o
+  `dragOverStatus`/`draggingId` resetam e a tela volta ao estado anterior
+  como se nada tivesse acontecido.
+- **Causa raiz:** duas peças que não se falam. (1) No banco, a trigger
+  `enforce_operation_status_step` (`BEFORE UPDATE OF status ON
+  operations`) rejeita qualquer transição cujo `abs(novo_índice -
+  índice_antigo) <> 1` na ordem `NEW/IN_PROGRESS/APPROVAL/REVISION/DONE`,
+  levantando exceção. (2) No frontend, `ProjectsPage` renderiza as 5
+  colunas via `OPERATION_STATUS_ORDER.map(...)` e `handleColumnDrop` chama
+  `moveToStatus(operationId, status)` pra QUALQUER coluna solta, sem checar
+  adjacência antes. `moveToStatus` chama `updateStatus` (em
+  `useOperations.ts`), que devolve `{ error: error?.message ?? null }` —
+  mas `moveToStatus` nunca lê esse retorno, só reseta `movingId`. O erro
+  do Postgres chega até o cliente Supabase e é descartado ali mesmo.
+- **Impacto real:** indeterminado — não confirmado se algum usuário real já
+  bateu nisso (arrastar 2+ colunas de distância é um gesto plausível num
+  Kanban de 5 colunas lado a lado). Sem registro de reclamação do dono
+  sobre isso até esta data.
+- **Tentativas que falharam:** nenhuma tentativa de correção nesta sessão —
+  achado fora do escopo combinado com o usuário (que pediu só a migration
+  de baseline); registrado pra decisão explícita antes de mexer.
+- **Solução aplicada:** nenhuma ainda. Caminhos possíveis pra próxima
+  sessão: (a) no frontend, computar adjacência antes do drop e recusar
+  visualmente colunas não-adjacentes (`dragOverStatus` já existe, dá pra
+  estilizar como "não permitido"); (b) mostrar o `error.message` da trigger
+  (já vem em português, ex: "Transição de status inválida...") num toast
+  quando `moveToStatus`/`updateStatus` falha; provavelmente (a)+(b) juntos
+  — UX preventiva + fallback de erro visível.
+- **Regra preventiva:** ao adicionar/alterar uma trigger de banco que
+  restringe transições de estado, sempre conferir se alguma UI de
+  drag-and-drop/edição livre no frontend pode gerar uma transição inválida
+  — e, se puder, ou trava no frontend antes de mandar pro banco, ou mostra
+  o erro que volta. Nunca `await` uma chamada que devolve `{ error }` sem
+  checar o campo.
+- **Quando esta regra se aplica:** qualquer tela com Kanban/drag-and-drop
+  ou edição de status livre sobre uma tabela com trigger de transição
+  restrita no banco.
+- **Skills relacionadas:** SKL-0001 (Supabase/Postgres), SKL-0005
+  (Frontend)
+- **Referências:** sessão de 2026-08-27; migration
+  `20260827190000_baseline_operation_status_pipeline.sql` (documenta a
+  trigger); commit `d08b8c0`.
+- **Confiança:** Alta na causa raiz (lida direto no código-fonte e na
+  definição da trigger); Média no impacto real em produção (não
+  reproduzido via UI, não confirmado se já afetou o dono/equipe).
 
 ## Registro rápido durante a tarefa
 

@@ -233,6 +233,9 @@ full-text (accent-insensitive), automação parcial de nota de pesar.
 6. Revisar 3 funções `SECURITY DEFINER` executáveis por `anon`/`authenticated`
    (`bootstrap_my_workspace`, `has_workspace_role`, `is_workspace_member`) e mover `pg_net`
    pra fora do schema `public` (achados do advisor de segurança do Supabase, não corrigidos).
+7. Corrigir o Kanban de Tarefas pra respeitar a trigger de transição de status (recusar
+   drop em coluna não-adjacente e/ou mostrar o erro do Postgres) — ver
+   `PROJECT_LESSONS.md` LES-0022.
 
 ## Decisões vigentes
 - Delay de 90s antes de responder cliente automaticamente (histórico de idas e voltas:
@@ -273,12 +276,22 @@ full-text (accent-insensitive), automação parcial de nota de pesar.
 - `README.md` e parte de `DOCUMENTATION/` estão desatualizados em relação ao schema e à
   função de produção reais (citam `profiles`/`whatsapp-webhook`, não `users`+`memberships`
   /`agent-whatsapp`).
-- **`supabase/migrations/` tem lacunas reais**: a tabela `operations` e o tipo enum
-  `operation_status` (junto com boa parte do schema `workspaces`-centric hoje em uso) não
-  são criados por nenhuma migration local — foram aplicados direto no Postgres remoto em
-  algum momento não documentado. Confirmado em 2026-08-27 ao validar o refactor de
-  `OperationStatus` abaixo. Não confiar no grep de `supabase/migrations/` pra essas
-  tabelas — confirmar direto no banco via MCP. Ver `PROJECT_LESSONS.md` LES-0021.
+- **`supabase/migrations/` tem lacunas reais**: a tabela `operations` (colunas, FKs,
+  índices, RLS) e o schema `workspaces`-centric maior (`workspaces`, `users`,
+  `memberships`, `membership_role`) não são criados por nenhuma migration local — foram
+  aplicados direto no Postgres remoto em algum momento não documentado. Os enums
+  `operation_status`/`operation_priority` e a trigger de transição de status já foram
+  espelhados em 2026-08-27
+  (`supabase/migrations/20260827190000_baseline_operation_status_pipeline.sql`); o resto
+  (tabela `operations` em si + schema `workspaces`) continua sem baseline — ver Pendência
+  #6. Não confiar no grep de `supabase/migrations/` pra essas tabelas — confirmar direto no
+  banco via MCP. Ver `PROJECT_LESSONS.md` LES-0021.
+- **Kanban de Tarefas (`ProjectsPage`) permite arrastar card pra qualquer coluna**, mas o
+  banco tem uma trigger (`trg_operations_status_step`) que só aceita mover status 1 etapa
+  por vez — dropar 2+ colunas de distância é rejeitado pelo Postgres e o erro é descartado
+  em silêncio pelo frontend (`moveToStatus` não lê o `{ error }` de `updateStatus`).
+  Não corrigido ainda, não confirmado se já afetou uso real. Ver `PROJECT_LESSONS.md`
+  LES-0022.
 
 ## Convenções do projeto
 - Comentários e nomes de variável majoritariamente em português (código do domínio) com

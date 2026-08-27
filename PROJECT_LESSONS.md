@@ -24,6 +24,7 @@
 | LES-0014 | Cliente duplicado — telefone no cadastro errado | Erro | Cliente ATIVO com telefone quebrado (sem DDD) + conversa real presa num cadastro INATIVO duplicado; resolveClientRef não excluía arquivados, mantendo ambiguidade mesmo depois de arquivar | Vigente | 2026-08-15 |
 | LES-0015 | send_message — número sem DDI/9º dígito | Erro | to_phone cru era mandado sem normalizar; número com 9º dígito não batia com conta registrada no formato antigo, e a Evolution "aceitava" sem nunca entregar | Vigente | 2026-08-16 |
 | LES-0016 | Anthropic API — saldo esgotado | Incidente | Todo o Tettolino parou de responder ("Deu ruim" pra qualquer mensagem, até "oi") porque a conta Anthropic ficou sem crédito — sintoma idêntico a um bug de código, mas era financeiro | Vigente | 2026-08-16 |
+| LES-0021 | Schema `operations`/`workspaces` — drift de migration | Descoberta | Enum `operation_status` (e boa parte do schema workspace-centric) existe e foi alterado direto no Postgres de produção, sem nenhum arquivo espelhado em `supabase/migrations/` | Vigente | 2026-08-27 |
 
 ## Regras preventivas consolidadas
 
@@ -776,6 +777,63 @@
 - **Skills relacionadas:** SKL-0009
 - **Referências:** sessão de 2026-08-26.
 - **Confiança:** Alta
+
+### LES-0021 — Tabela `operations` e o enum `operation_status` não existem em nenhuma migration local (drift de schema não documentado)
+- **Status:** Vigente
+- **Tipo:** Descoberta
+- **Severidade:** Média (não bloqueou a tarefa desta sessão, mas é risco pra reconstrução
+  de ambiente/disaster recovery e pra confiar cegamente no diff de uma migration)
+- **Área/módulo:** `supabase/migrations/`, tabela `public.operations`, tipo
+  `public.operation_status`
+- **Primeira ocorrência:** descoberta nesta sessão, 2026-08-27, ao validar um refactor de
+  frontend que simplificava `OperationStatus` de 9 pra 5 valores.
+- **Última validação:** 2026-08-27 (consultado `information_schema`/`pg_enum` direto no
+  projeto Supabase `lniinjegcvdcrmsrzqkt` via MCP).
+- **Sintoma:** ao procurar a migration que criaria/alteraria `operations.status` pra
+  confirmar se o refactor de frontend batia com o banco real, nenhum arquivo em
+  `supabase/migrations/*.sql` cria a tabela `operations` nem o tipo `operation_status` —
+  só existem `ALTER TABLE public.operations ADD COLUMN ...` que pressupõem a tabela já
+  existir. O schema inicial (`20260730000000_initial_schema.sql`) descreve um modelo
+  antigo e diferente (`profiles`/`clients`/`projects`/`project_status`), incompatível com
+  o modelo `workspaces`/`users`/`memberships`/`operations` realmente em uso hoje (ver nota
+  em `src/types/database.ts:1`: "Tipos alinhados ao schema Supabase remoto").
+- **Causa raiz:** em algum momento a migração para o modelo `workspace_id`-based
+  (`operations`, `workspaces`, `users`, `memberships`, `operation_status` como enum) foi
+  aplicada direto no Postgres remoto (via `execute_sql`/dashboard, ou `apply_migration`
+  sem o arquivo correspondente ter sido commitado/mantido no repo) — quebrando a garantia
+  documentada em `CLAUDE.md`/`PROJECT_CONTEXT.md` de que toda migration aplicada via MCP
+  é espelhada localmente.
+- **Impacto real confirmado nesta sessão:** nenhum — o enum `operation_status` no banco já
+  tinha exatamente os 5 valores que o refactor de frontend esperava
+  (`NEW/IN_PROGRESS/APPROVAL/REVISION/DONE`, confirmado via `pg_enum`), e só havia 1
+  operação em produção (sequela do reset de `PROJECT_LESSONS.md`/`CHANGELOG_AI.md` de
+  17/08), então não houve risco de status órfão.
+- **Tentativas que falharam:** delegar a busca da definição da coluna `status` a um
+  subagente varrendo só o repo local — ele confirmou a ausência, mas não conseguiu
+  concluir a definição real (precisou de consulta direta ao banco via MCP
+  `execute_sql`/`pg_enum`, não reconstruível só do Git).
+- **Solução aplicada nesta sessão:** nenhuma migration corretiva foi escrita — o usuário
+  optou por seguir só com o commit do frontend por ora. Ação de espelhar o schema real
+  numa migration de "baseline" (`pg_dump --schema-only` ou consulta a
+  `information_schema`/`pg_enum`/`pg_constraint` e escrever o SQL equivalente) fica como
+  pendência aberta.
+- **Regra preventiva:** antes de assumir que um enum/coluna citado no frontend
+  (`src/types/database.ts`) bate com o banco, **não confiar no grep de
+  `supabase/migrations/`** pra este projeto — a árvore de migrations tem lacunas
+  conhecidas. Confirmar direto no Postgres via MCP (`execute_sql` em
+  `information_schema.columns`/`pg_enum`/`pg_constraint`, ou `list_tables` verbose) antes
+  de declarar uma mudança de tipo "segura" ou "sem risco de dado órfão".
+- **Quando esta regra se aplica:** qualquer mudança que dependa de saber o schema real de
+  `operations`, `workspaces`, `users` ou `memberships` — não confiar que a migration local
+  mais recente descreve o estado atual dessas tabelas.
+- **Quando não se aplica:** tabelas criadas nesta sessão ou em sessões recentes bem
+  documentadas (`hermes_*`, `pending_bot_replies`, `knowledge_base`, etc.) — essas têm
+  migration local confiável.
+- **Skills relacionadas:** SKL-0001 (Supabase), SKL-0005 (Frontend)
+- **Referências:** sessão de 2026-08-27; ver também `PROJECT_CONTEXT.md` Pendência #0
+  (branch `main` divergente) e riscos de `README.md`/`DOCUMENTATION/` desatualizados —
+  mesmo padrão de "documentação/histórico não bate com a realidade do banco".
+- **Confiança:** Alta (confirmado direto na fonte, não inferido)
 
 ## Registro rápido durante a tarefa
 

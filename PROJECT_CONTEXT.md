@@ -3,7 +3,7 @@
 ## Metadados
 - Projeto: TettoFlow AI OS (produto interno da agência TettoHub)
 - Repositório: `tettohubpro-png/TettoFlow-AI` (GitHub, remote `origin`)
-- Última atualização: 2026-08-26T17:35:00+00:00
+- Última atualização: 2026-08-27T00:00:00+00:00
 - Branch de referência: `claude/vps-access-connection-z05wyj` — ver Pendência #0 sobre
   divergência com `main`
 - Status geral: em produção, uso ativo diário pela agência (não é protótipo)
@@ -273,6 +273,12 @@ full-text (accent-insensitive), automação parcial de nota de pesar.
 - `README.md` e parte de `DOCUMENTATION/` estão desatualizados em relação ao schema e à
   função de produção reais (citam `profiles`/`whatsapp-webhook`, não `users`+`memberships`
   /`agent-whatsapp`).
+- **`supabase/migrations/` tem lacunas reais**: a tabela `operations` e o tipo enum
+  `operation_status` (junto com boa parte do schema `workspaces`-centric hoje em uso) não
+  são criados por nenhuma migration local — foram aplicados direto no Postgres remoto em
+  algum momento não documentado. Confirmado em 2026-08-27 ao validar o refactor de
+  `OperationStatus` abaixo. Não confiar no grep de `supabase/migrations/` pra essas
+  tabelas — confirmar direto no banco via MCP. Ver `PROJECT_LESSONS.md` LES-0021.
 
 ## Convenções do projeto
 - Comentários e nomes de variável majoritariamente em português (código do domínio) com
@@ -293,6 +299,10 @@ full-text (accent-insensitive), automação parcial de nota de pesar.
    confirmar o que está realmente em uso antes de decidir remover ou atualizar.
 5. Atualizar `README.md`/`DOCUMENTATION/` pra refletir o schema e a função de produção
    reais.
+6. Escrever uma migration de "baseline" que espelhe o schema real de `operations`/
+   `workspaces`/`users`/`memberships` hoje em produção (consultar `information_schema`/
+   `pg_enum`/`pg_constraint` via MCP, não reconstruir de memória) — fecha a lacuna
+   registrada em `PROJECT_LESSONS.md` LES-0021.
 
 ## Referências internas
 - Histórico completo: `CHANGELOG_AI.md`

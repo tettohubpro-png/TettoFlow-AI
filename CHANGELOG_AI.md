@@ -5,6 +5,38 @@
 > deploys verificados, testes reais). Antes disso, ver "Linha de base histórica" ao final —
 > reconstruída a partir do `git log`, sem acesso a decisões não documentadas em commit.
 
+## 2026-08-27T00:00:00+00:00 — Simplifica pipeline de status de operação (9→5 estados) + descobre drift de migration em `operations`
+
+- **Contexto:** sessão retomou 13 arquivos de frontend já modificados (não commitados) por
+  uma sessão anterior, simplificando `OperationStatus` de
+  `DRAFT/SUBMITTED/ANALYSIS/PRODUCTION/REVIEW/CLIENT/APPROVED/PUBLISHED/DONE` (9 valores)
+  pra `NEW/IN_PROGRESS/APPROVAL/REVISION/DONE` (5 valores). Antes de commitar, validei o
+  trabalho e confirmei que batia com a realidade de produção.
+- **Validação executada:** `npm run build` limpo, `npm test` 25/25 passando; consulta
+  direta ao Postgres do projeto Supabase (`lniinjegcvdcrmsrzqkt`) via MCP confirmou que o
+  enum `operation_status` **já estava** com os 5 valores novos (não foi este refactor que
+  mudou o banco) e que só existe 1 operação em produção hoje (status `NEW`, sequela do
+  reset de tarefas/operações de 17/08) — sem risco de status órfão.
+- **Descoberta lateral (não corrigida nesta sessão, só documentada):** ao procurar a
+  migration que definiria `operation_status`, descobri que **nenhum arquivo em
+  `supabase/migrations/` cria a tabela `operations` nem o tipo `operation_status`** — o
+  schema `workspaces`-centric real (`operations`, `workspaces`, `users`, `memberships`) foi
+  aplicado direto no banco remoto em algum momento não documentado, quebrando a garantia
+  do projeto de que toda migration via MCP é espelhada localmente. Ver `PROJECT_LESSONS.md`
+  LES-0021.
+- **Alterações realizadas:** `types/database.ts` (união de tipo), `utils/permissions.ts`
+  (labels/ordem dos status), `useOperations`/`onboardingSteps` (operação nova parte de
+  `NEW`), `useApprovals` (fluxo `APPROVAL`→`REVISION`/`IN_PROGRESS`), `useDashboard`,
+  `PostCalendar`, `ClientBriefingPage`, `DashboardPage`, `DepartmentsPage`, `ProjectsPage`,
+  `OperationCard` (botão "Avançar" só aparece em `IN_PROGRESS`), e reordenação do menu
+  lateral (`AppShell`: Agenda/Tarefas sobem, Financeiro desce).
+- **Pendências deixadas em aberto por decisão do usuário** (perguntei, ele só pediu o
+  commit do refactor): 2 fixtures de teste (`aiReply.test.ts`, `aiContext.test.ts`) ainda
+  citam o status antigo `PRODUCTION` (não quebram nada, só ficaram semanticamente
+  desatualizadas); pasta `dist-preview/` (build manual, 940KB) não rastreada e fora do
+  `.gitignore`; migration de baseline pra fechar o drift do LES-0021 não escrita.
+- **Referência Git:** commit `e8d18d2`.
+
 ## 2026-08-26T17:35:00+00:00 — Confirma deploy real self-hosted na VPS (não é Vercel), apaga projeto órfão na Vercel, e corrige domínio/SSL/Auth do AM Consultoria (projeto irmão na mesma VPS)
 
 - **Contexto:** dono pediu explicação da estrutura do projeto (sessão iniciada direto na

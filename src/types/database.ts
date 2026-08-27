@@ -3,14 +3,10 @@
 export type MembershipRole = 'OWNER' | 'ADMIN' | 'MANAGER' | 'MEMBER' | 'CLIENT'
 export type ClientStatus = 'ACTIVE' | 'INACTIVE' | 'ARCHIVED'
 export type OperationStatus =
-  | 'DRAFT'
-  | 'SUBMITTED'
-  | 'ANALYSIS'
-  | 'PRODUCTION'
-  | 'REVIEW'
-  | 'CLIENT'
-  | 'APPROVED'
-  | 'PUBLISHED'
+  | 'NEW'
+  | 'IN_PROGRESS'
+  | 'APPROVAL'
+  | 'REVISION'
   | 'DONE'
 export type OperationPriority = 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL'
 /** Segmento regulatório para compliance de IA (WhatsApp) */

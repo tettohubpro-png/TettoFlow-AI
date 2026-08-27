@@ -59,7 +59,7 @@ export function DepartmentsPage() {
   }, [assignments])
 
   const advance = async (id: string, status: OperationStatus) => {
-    const order = ['DRAFT', 'SUBMITTED', 'ANALYSIS', 'PRODUCTION', 'REVIEW'] as const
+    const order = ['NEW', 'IN_PROGRESS'] as const
     const idx = order.indexOf(status as (typeof order)[number])
     if (idx < 0 || idx >= order.length - 1) return
     await updateStatus(id, order[idx + 1])
@@ -209,13 +209,13 @@ export function DepartmentsPage() {
                   Prazo: {new Date(op.deadline).toLocaleDateString('pt-BR')}
                 </p>
               )}
-              {['DRAFT', 'SUBMITTED', 'ANALYSIS', 'PRODUCTION'].includes(op.status) && (
+              {op.status === 'NEW' && (
                 <button
                   type="button"
                   onClick={() => advance(op.id, op.status)}
                   className="mt-3 text-xs text-emerald-400 hover:underline"
                 >
-                  Avançar para revisão →
+                  Avançar para criação →
                 </button>
               )}
             </article>

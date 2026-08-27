@@ -505,9 +505,9 @@ function VisualizacaoTab({
               </span>
             </div>
             <div className="mt-2 grid grid-cols-2 gap-1 text-xs text-slate-500">
-              <span>{counts.DRAFT ?? 0} rascunho</span>
-              <span>{counts.REVIEW ?? 0} em revisão</span>
-              <span>{(counts.APPROVED ?? 0) + (counts.PUBLISHED ?? 0)} aprovados</span>
+              <span>{counts.NEW ?? 0} novas</span>
+              <span>{counts.IN_PROGRESS ?? 0} em criação</span>
+              <span>{(counts.APPROVAL ?? 0) + (counts.REVISION ?? 0)} em aprovação/revisão</span>
               <span>{counts.DONE ?? 0} concluídos</span>
             </div>
           </div>

@@ -1,26 +1,18 @@
 import type { JobRole, MembershipRole } from '@/types/database'
 
 export const OPERATION_STATUS_LABELS: Record<string, string> = {
-  DRAFT: 'Rascunho',
-  SUBMITTED: 'Enviado',
-  ANALYSIS: 'Análise',
-  PRODUCTION: 'Produção',
-  REVIEW: 'Revisão',
-  CLIENT: 'Cliente',
-  APPROVED: 'Aprovado',
-  PUBLISHED: 'Publicado',
+  NEW: 'Nova tarefa',
+  IN_PROGRESS: 'Em criação',
+  APPROVAL: 'Aprovação',
+  REVISION: 'Revisão',
   DONE: 'Concluído',
 }
 
 export const OPERATION_STATUS_ORDER = [
-  'DRAFT',
-  'SUBMITTED',
-  'ANALYSIS',
-  'PRODUCTION',
-  'REVIEW',
-  'CLIENT',
-  'APPROVED',
-  'PUBLISHED',
+  'NEW',
+  'IN_PROGRESS',
+  'APPROVAL',
+  'REVISION',
   'DONE',
 ] as const
 

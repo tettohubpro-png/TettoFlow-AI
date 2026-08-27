@@ -13,7 +13,7 @@ export function DashboardPage() {
   const { stats, loading } = useDashboardStats()
   const { operations } = useOperations()
 
-  const pendingReviews = operations.filter((op) => op.status === 'REVIEW')
+  const pendingReviews = operations.filter((op) => op.status === 'APPROVAL')
   const today = new Date().toISOString().slice(0, 10)
   const todayOps = operations.filter(
     (op) => op.deadline && op.deadline.startsWith(today),

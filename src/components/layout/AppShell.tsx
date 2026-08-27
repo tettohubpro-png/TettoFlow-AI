@@ -41,11 +41,11 @@ interface NavItem {
 const primaryNav: NavItem[] = [
   { to: '/', label: 'Início', icon: Home, end: true },
   { to: '/mensagens', label: 'WhatsApp', icon: MessageCircle },
-  { to: '/crm', label: 'Clientes', icon: Users },
-  { to: '/tarefas', label: 'Tarefas', icon: CheckSquare },
-  { to: '/financeiro', label: 'Financeiro', icon: Wallet },
   { to: '/agenda', label: 'Agenda', icon: Calendar },
+  { to: '/tarefas', label: 'Tarefas', icon: CheckSquare },
+  { to: '/crm', label: 'Clientes', icon: Users },
   { to: '/equipe', label: 'Equipe', icon: UsersRound },
+  { to: '/financeiro', label: 'Financeiro', icon: Wallet },
 ]
 
 const tettoNav: NavItem[] = [

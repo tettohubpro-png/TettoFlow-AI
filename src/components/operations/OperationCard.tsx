@@ -178,7 +178,7 @@ export function OperationCard({
             Avançar →
           </button>
         )}
-        {['PRODUCTION', 'REVIEW'].includes(status) && (
+        {status === 'IN_PROGRESS' && (
           <>
             <button
               type="button"

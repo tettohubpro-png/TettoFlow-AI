@@ -26,15 +26,11 @@ import type { ClientFile, Operation, OperationStatus } from '@/types/database'
 type ViewMode = 'kanban' | 'tabela' | 'calendario'
 
 const STATUS_DOT: Record<OperationStatus, string> = {
-  DRAFT: 'bg-slate-500',
-  SUBMITTED: 'bg-sky-400',
-  ANALYSIS: 'bg-sky-400',
-  PRODUCTION: 'bg-amber-400',
-  REVIEW: 'bg-amber-400',
-  CLIENT: 'bg-violet-400',
-  APPROVED: 'bg-emerald-400',
-  PUBLISHED: 'bg-emerald-400',
-  DONE: 'bg-slate-600',
+  NEW: 'bg-slate-500',
+  IN_PROGRESS: 'bg-amber-400',
+  APPROVAL: 'bg-violet-400',
+  REVISION: 'bg-sky-400',
+  DONE: 'bg-emerald-400',
 }
 
 export function ProjectsPage() {
@@ -321,7 +317,7 @@ export function ProjectsPage() {
                         loadingEdit === op.id ||
                         movingId === op.id
                       }
-                      canRevert={!!prev && op.status !== 'DRAFT'}
+                      canRevert={!!prev && op.status !== 'NEW'}
                       canAdvance={op.status !== 'DONE'}
                       isDragging={draggingId === op.id}
                       onDragBegin={() => setDraggingId(op.id)}

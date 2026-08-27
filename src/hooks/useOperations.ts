@@ -132,7 +132,7 @@ export function useOperations(clientId?: string) {
         template_id: DEFAULT_TEMPLATE_ID,
         title: form.title.trim(),
         description: form.description.trim() || null,
-        status: 'DRAFT' as OperationStatus,
+        status: 'NEW' as OperationStatus,
         priority: 'MEDIUM',
         start_date: form.start_date ? new Date(form.start_date).toISOString() : null,
         deadline: form.deadline ? new Date(form.deadline).toISOString() : null,

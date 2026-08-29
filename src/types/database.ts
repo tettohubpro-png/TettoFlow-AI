@@ -2,6 +2,21 @@
 
 export type MembershipRole = 'OWNER' | 'ADMIN' | 'MANAGER' | 'MEMBER' | 'CLIENT'
 export type ClientStatus = 'ACTIVE' | 'INACTIVE' | 'ARCHIVED'
+export type ClientType = 'CLIENT' | 'PARTNER'
+/** Funil de prospecção: Prospecção → Contatado → Interessado → Proposta Enviada → Convertido, com Perdido em paralelo */
+export type ClientPipelineStage =
+  | 'PROSPECT'
+  | 'CONTACTED'
+  | 'INTERESTED'
+  | 'PROPOSAL_SENT'
+  | 'WON'
+  | 'LOST'
+export type ClientLostReason =
+  | 'NO_INTEREST'
+  | 'HAS_AGENCY'
+  | 'NO_BUDGET'
+  | 'NO_RESPONSE'
+  | 'OTHER'
 export type OperationStatus =
   | 'NEW'
   | 'IN_PROGRESS'
@@ -69,6 +84,12 @@ export interface Client {
   workspace_id: string
   name: string
   status: ClientStatus
+  client_type: ClientType
+  pipeline_stage: ClientPipelineStage
+  lost_reason: ClientLostReason | null
+  next_follow_up_date: string | null
+  prospected_by: string | null
+  prospected_at: string
   segment: string | null
   cpf_cnpj: string | null
   city: string | null

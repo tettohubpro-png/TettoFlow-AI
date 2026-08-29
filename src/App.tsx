@@ -6,6 +6,7 @@ import { ForgotPasswordPage } from '@/pages/ForgotPasswordPage'
 import { ResetPasswordPage } from '@/pages/ResetPasswordPage'
 import { DashboardPage } from '@/pages/DashboardPage'
 import { CrmPage } from '@/pages/CrmPage'
+import { ProspectingPage } from '@/pages/ProspectingPage'
 import { ClientBriefingPage } from '@/pages/ClientBriefingPage'
 import { ProjectsPage } from '@/pages/ProjectsPage'
 import { AgendaPage } from '@/pages/AgendaPage'
@@ -34,6 +35,7 @@ export default function App() {
           <Route element={<ProtectedRoute />}>
             <Route index element={<DashboardPage />} />
             <Route path="crm" element={<CrmPage />} />
+            <Route path="prospeccao" element={<ProspectingPage />} />
             <Route path="crm/:clientId" element={<ClientBriefingPage />} />
             <Route path="comercial" element={<Navigate to="/crm" replace />} />
             <Route path="conteudo" element={<Navigate to="/tarefas" replace />} />

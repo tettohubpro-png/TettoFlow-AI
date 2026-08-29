@@ -22,6 +22,49 @@ export const CLIENT_STATUS_LABELS: Record<string, string> = {
   ARCHIVED: 'Arquivado',
 }
 
+export const CLIENT_TYPE_LABELS: Record<string, string> = {
+  CLIENT: 'Cliente',
+  PARTNER: 'Parceiro',
+}
+
+export const PIPELINE_STAGE_LABELS: Record<string, string> = {
+  PROSPECT: 'Prospecção',
+  CONTACTED: 'Contatado',
+  INTERESTED: 'Interessado',
+  PROPOSAL_SENT: 'Proposta enviada',
+  WON: 'Convertido',
+  LOST: 'Perdido',
+}
+
+/** Ordem das colunas do Kanban de Prospecção — 'LOST' fica de fora do fluxo linear. */
+export const PIPELINE_STAGE_ORDER = [
+  'PROSPECT',
+  'CONTACTED',
+  'INTERESTED',
+  'PROPOSAL_SENT',
+] as const
+
+export const LOST_REASON_LABELS: Record<string, string> = {
+  NO_INTEREST: 'Sem interesse',
+  HAS_AGENCY: 'Já tem agência',
+  NO_BUDGET: 'Sem orçamento',
+  NO_RESPONSE: 'Sem resposta',
+  OTHER: 'Outro motivo',
+}
+
+export function nextPipelineStage(current: string): string | null {
+  const idx = PIPELINE_STAGE_ORDER.indexOf(current as (typeof PIPELINE_STAGE_ORDER)[number])
+  if (idx < 0) return null
+  if (idx >= PIPELINE_STAGE_ORDER.length - 1) return 'WON'
+  return PIPELINE_STAGE_ORDER[idx + 1]
+}
+
+export function previousPipelineStage(current: string): string | null {
+  const idx = PIPELINE_STAGE_ORDER.indexOf(current as (typeof PIPELINE_STAGE_ORDER)[number])
+  if (idx <= 0) return null
+  return PIPELINE_STAGE_ORDER[idx - 1]
+}
+
 export const OPERATION_PRIORITY_LABELS: Record<string, string> = {
   LOW: 'Baixa',
   MEDIUM: 'Média',
@@ -158,6 +201,7 @@ const ALL_NAV: NavItem[] = [
   { to: '/mensagens', label: 'WhatsApp', short: 'Zap' },
   { to: '/tarefas', label: 'Tarefas', short: 'Tasks' },
   { to: '/crm', label: 'CRM', short: 'CRM' },
+  { to: '/prospeccao', label: 'Prospecção', short: 'Prosp' },
   { to: '/financeiro', label: 'Financeiro', short: 'Fin' },
   { to: '/equipe', label: 'Equipe', short: 'Team' },
   { to: '/departamentos', label: 'Departamentos', short: 'Depts' },

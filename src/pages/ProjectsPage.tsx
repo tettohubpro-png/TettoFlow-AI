@@ -66,6 +66,7 @@ export function ProjectsPage() {
   const [selectedCalendarOp, setSelectedCalendarOp] = useState<OperationDetails | null>(null)
   const [calendarError, setCalendarError] = useState<string | null>(null)
   const [busyFileId, setBusyFileId] = useState<string | null>(null)
+  const [moveError, setMoveError] = useState<string | null>(null)
 
   const filteredOperations = clientFilter
     ? operations.filter((op) => op.client_id === clientFilter)
@@ -144,27 +145,54 @@ export function ProjectsPage() {
   const advance = async (operationId: string, current: OperationStatus) => {
     const next = nextOperationStatus(current) as OperationStatus | null
     if (!next) return
-    await updateStatus(operationId, next)
+    const { error } = await updateStatus(operationId, next)
+    if (error) setMoveError(error)
   }
 
   const revert = async (operationId: string, current: OperationStatus) => {
     const prev = previousOperationStatus(current) as OperationStatus | null
     if (!prev) return
-    await updateStatus(operationId, prev)
+    const { error } = await updateStatus(operationId, prev)
+    if (error) setMoveError(error)
+  }
+
+  // Espelha a trigger enforce_operation_status_step do Postgres: só deixa
+  // mover 1 etapa por vez (pra frente ou pra trás); DONE é terminal. Ver
+  // PROJECT_LESSONS.md LES-0022 — antes disso o Kanban deixava soltar em
+  // qualquer coluna e o erro do banco era descartado em silêncio.
+  const isAdjacentStatus = (from: OperationStatus, to: OperationStatus) => {
+    if (from === to) return true
+    if (from === 'DONE') return false
+    const fromIdx = OPERATION_STATUS_ORDER.indexOf(from)
+    const toIdx = OPERATION_STATUS_ORDER.indexOf(to)
+    return Math.abs(toIdx - fromIdx) === 1
   }
 
   const moveToStatus = async (operationId: string, toStatus: OperationStatus) => {
     if (!canOperate) return
     const op = operations.find((o) => o.id === operationId)
     if (!op || op.status === toStatus) return
+
+    if (!isAdjacentStatus(op.status, toStatus)) {
+      setMoveError(
+        op.status === 'DONE'
+          ? 'Status "Concluído" é final — não dá pra mover de volta.'
+          : `Não dá pra pular direto de "${OPERATION_STATUS_LABELS[op.status]}" pra "${OPERATION_STATUS_LABELS[toStatus]}" — só uma etapa por vez.`,
+      )
+      return
+    }
+
     setMovingId(operationId)
-    await updateStatus(operationId, toStatus)
+    const { error } = await updateStatus(operationId, toStatus)
     setMovingId(null)
+    if (error) setMoveError(error)
   }
 
   const handleColumnDragOver = (e: DragEvent<HTMLDivElement>, status: string) => {
     e.preventDefault()
-    e.dataTransfer.dropEffect = 'move'
+    const draggingOp = draggingId ? operations.find((o) => o.id === draggingId) : null
+    const allowed = !draggingOp || isAdjacentStatus(draggingOp.status, status as OperationStatus)
+    e.dataTransfer.dropEffect = allowed ? 'move' : 'none'
     if (dragOverStatus !== status) setDragOverStatus(status)
   }
 
@@ -190,6 +218,19 @@ export function ProjectsPage() {
 
   return (
     <div>
+      {moveError && (
+        <div className="mb-3 flex items-center justify-between gap-3 rounded-lg border border-red-800/60 bg-red-950/40 px-3 py-2 text-sm text-red-300">
+          <span>{moveError}</span>
+          <button
+            type="button"
+            onClick={() => setMoveError(null)}
+            className="min-h-8 min-w-8 shrink-0 rounded text-red-400 hover:text-red-200"
+            aria-label="Fechar aviso"
+          >
+            ✕
+          </button>
+        </div>
+      )}
       <header className="mb-4 flex flex-col gap-3 sm:mb-6 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h2 className="text-xl font-bold sm:text-2xl">Tarefas</h2>
@@ -273,7 +314,11 @@ export function ProjectsPage() {
             setDragOverStatus(null)
           }}
         >
-          {byStatus.map(({ status, items }) => (
+          {byStatus.map(({ status, items }) => {
+            const draggingOp = draggingId ? operations.find((o) => o.id === draggingId) : null
+            const dropAllowed = !draggingOp || isAdjacentStatus(draggingOp.status, status)
+            const isOver = dragOverStatus === status
+            return (
             <div
               key={status}
               onDragOver={(e) => handleColumnDragOver(e, status)}
@@ -282,9 +327,11 @@ export function ProjectsPage() {
               }}
               onDrop={(e) => handleColumnDrop(e, status)}
               className={`w-[78vw] max-w-xs shrink-0 rounded-xl border p-3 transition sm:w-auto sm:max-w-none ${
-                dragOverStatus === status
-                  ? 'border-sky-500 bg-sky-950/40 ring-2 ring-sky-500/30'
-                  : 'border-slate-800 bg-slate-900/30'
+                isOver && !dropAllowed
+                  ? 'border-red-500 bg-red-950/20 ring-2 ring-red-500/30'
+                  : isOver
+                    ? 'border-sky-500 bg-sky-950/40 ring-2 ring-sky-500/30'
+                    : 'border-slate-800 bg-slate-900/30'
               }`}
             >
               <h3 className="mb-3 text-xs font-semibold uppercase tracking-wide text-slate-400">
@@ -293,7 +340,7 @@ export function ProjectsPage() {
               <ul className="min-h-16 space-y-2">
                 {items.length === 0 && (
                   <li className="rounded-lg border border-dashed border-slate-700 px-3 py-6 text-center text-xs text-slate-600">
-                    {dragOverStatus === status ? 'Solte aqui' : 'Arraste um card'}
+                    {isOver ? (dropAllowed ? 'Solte aqui' : 'Só 1 etapa por vez') : 'Arraste um card'}
                   </li>
                 )}
                 {items.map((op) => {
@@ -327,7 +374,8 @@ export function ProjectsPage() {
                 })}
               </ul>
             </div>
-          ))}
+            )
+          })}
         </div>
       )}
 

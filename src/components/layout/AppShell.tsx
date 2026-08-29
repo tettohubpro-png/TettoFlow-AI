@@ -13,6 +13,7 @@ import {
   BarChart3,
   Sparkles,
   MessageCircle,
+  Target,
   Gift,
   Newspaper,
   LifeBuoy,
@@ -44,6 +45,7 @@ const primaryNav: NavItem[] = [
   { to: '/agenda', label: 'Agenda', icon: Calendar },
   { to: '/tarefas', label: 'Tarefas', icon: CheckSquare },
   { to: '/crm', label: 'Clientes', icon: Users },
+  { to: '/prospeccao', label: 'Prospecção', icon: Target },
   { to: '/equipe', label: 'Equipe', icon: UsersRound },
   { to: '/financeiro', label: 'Financeiro', icon: Wallet },
 ]

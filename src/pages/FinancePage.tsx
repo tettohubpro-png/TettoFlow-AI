@@ -4,11 +4,12 @@ import { useAuth } from '@/contexts/AuthContext'
 import { useFinancialEntries } from '@/hooks/useFinancialEntries'
 import { useCompanyBills, daysUntil, nextDueDateForDay } from '@/hooks/useCompanyBills'
 import { useClients } from '@/hooks/useClients'
+import { usePartners } from '@/hooks/usePartners'
 import { useTeamMembers } from '@/hooks/useTeamMembers'
 import { canManageFinance, canViewFinance } from '@/utils/permissions'
 import type { CompanyBill, CompanyBillKind, FinancialEntryStatus } from '@/types/database'
 
-type TabKey = 'overview' | 'company' | 'employees' | 'entries'
+type TabKey = 'overview' | 'company' | 'employees' | 'entries' | 'partners'
 
 const inputClass =
   'min-h-11 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm'
@@ -46,6 +47,7 @@ export function FinancePage() {
   } = useCompanyBills('employee')
   const { clients } = useClients()
   const { members } = useTeamMembers()
+  const { partners, loading: loadingPartners } = usePartners()
 
   const [tab, setTab] = useState<TabKey>('overview')
   const [highlightBillId, setHighlightBillId] = useState<string | null>(null)
@@ -93,7 +95,8 @@ export function FinancePage() {
     let overdue = 0
     for (const e of entries) {
       const isThisMonth = e.due_date.startsWith(currentMonth)
-      if (isThisMonth && e.status !== 'cancelled') {
+      // Permuta não é dinheiro em caixa — fica fora do faturamento real.
+      if (isThisMonth && e.status !== 'cancelled' && e.category !== 'permuta') {
         if (e.type === 'income') incomeMonth += e.amount
         else expenseMonth += e.amount
       }
@@ -107,6 +110,45 @@ export function FinancePage() {
     const dueSoon = upcomingBills.filter((u) => u.days <= 7).length
     return { incomeMonth, expenseMonth, pending, overdue, companyMonth, payrollMonth, dueSoon }
   }, [entries, currentMonth, today, companyBills, employeeBills, upcomingBills])
+
+  // Faturamento real (dinheiro em caixa) — exclui permuta e lançamentos
+  // cancelados. Cobre 3 meses passados + o mês atual + 6 meses futuros
+  // (as parcelas já foram geradas com 1 ano de antecedência nos contratos).
+  const monthlyRevenue = useMemo(() => {
+    const months: { key: string; label: string }[] = []
+    const base = new Date()
+    for (let i = -3; i <= 6; i++) {
+      const d = new Date(base.getFullYear(), base.getMonth() + i, 1)
+      const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
+      months.push({ key, label: d.toLocaleDateString('pt-BR', { month: 'short' }).replace('.', '') })
+    }
+    return months.map(({ key, label }) => {
+      const total = entries
+        .filter(
+          (e) =>
+            e.type === 'income' &&
+            e.category !== 'permuta' &&
+            e.status !== 'cancelled' &&
+            e.due_date.startsWith(key),
+        )
+        .reduce((s, e) => s + e.amount, 0)
+      return { key, label, total, isCurrent: key === currentMonth }
+    })
+  }, [entries, currentMonth])
+
+  const revenueByClient = useMemo(() => {
+    const byClient = new Map<string, number>()
+    for (const e of entries) {
+      if (e.type !== 'income' || e.category === 'permuta' || e.status === 'cancelled') continue
+      if (!e.due_date.startsWith(currentMonth)) continue
+      const name = e.clients?.name ?? 'Sem cliente'
+      byClient.set(name, (byClient.get(name) ?? 0) + e.amount)
+    }
+    return [...byClient.entries()]
+      .map(([name, total]) => ({ name, total }))
+      .sort((a, b) => b.total - a.total)
+      .slice(0, 10)
+  }, [entries, currentMonth])
 
   const handleEntrySubmit = async (e: FormEvent) => {
     e.preventDefault()
@@ -197,6 +239,7 @@ export function FinancePage() {
     { key: 'company', label: 'Contas da empresa' },
     { key: 'employees', label: 'Pagamentos equipe' },
     { key: 'entries', label: 'Lançamentos' },
+    { key: 'partners', label: `Parceiros (${partners.length})` },
   ]
 
   return (
@@ -261,6 +304,17 @@ export function FinancePage() {
             <StatCard label="Despesas lançadas (mês)" value={formatBRL(totals.expenseMonth)} tone="red" />
             <StatCard label="Contas empresa / mês" value={formatBRL(totals.companyMonth)} tone="amber" />
             <StatCard label="Folha equipe / mês" value={formatBRL(totals.payrollMonth)} tone="sky" />
+          </div>
+
+          <div className="mt-6 grid gap-4 lg:grid-cols-2">
+            <section className="rounded-xl border border-slate-800 bg-slate-900/40 p-4">
+              <h3 className="mb-4 font-semibold text-slate-200">Faturamento por mês</h3>
+              <MonthlyRevenueChart data={monthlyRevenue} />
+            </section>
+            <section className="rounded-xl border border-slate-800 bg-slate-900/40 p-4">
+              <h3 className="mb-4 font-semibold text-slate-200">Faturamento por cliente (mês atual)</h3>
+              <ClientRevenueChart data={revenueByClient} />
+            </section>
           </div>
 
           <section className="mt-6 rounded-xl border border-slate-800 bg-slate-900/40 p-4">
@@ -632,6 +686,68 @@ export function FinancePage() {
           </section>
         </>
       )}
+
+      {tab === 'partners' && (
+        <>
+          <p className="mb-4 text-sm text-slate-400">
+            Clientes por permuta ou parceria — sem valor em dinheiro, não entram no
+            faturamento (receita) da agência.
+          </p>
+          {loadingPartners ? (
+            <p className="text-sm text-slate-500">Carregando...</p>
+          ) : partners.length === 0 ? (
+            <p className="text-sm text-slate-500">Nenhum parceiro cadastrado ainda.</p>
+          ) : (
+            <ul className="space-y-3">
+              {partners.map((p) => {
+                const activeContract = p.client_contracts.find((c) => c.status === 'active')
+                return (
+                  <li
+                    key={p.id}
+                    className="rounded-xl border border-slate-800 bg-slate-900/40 p-4"
+                  >
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div>
+                        <p className="font-medium">{p.name}</p>
+                        {p.segment && (
+                          <p className="text-xs text-slate-500">{p.segment}</p>
+                        )}
+                      </div>
+                      <span className="rounded-full bg-violet-500/15 px-2.5 py-1 text-xs text-violet-300">
+                        Parceiro
+                      </span>
+                    </div>
+                    {activeContract ? (
+                      <div className="mt-3 grid gap-1 text-sm text-slate-300 sm:grid-cols-2">
+                        <p>
+                          <span className="text-slate-500">Valor da permuta: </span>
+                          {activeContract.monthly_value
+                            ? formatBRL(activeContract.monthly_value) + '/mês'
+                            : 'a definir'}
+                        </p>
+                        <p>
+                          <span className="text-slate-500">Forma: </span>
+                          {activeContract.payment_method || '—'}
+                        </p>
+                        {activeContract.service_description && (
+                          <p className="sm:col-span-2">
+                            <span className="text-slate-500">Serviço: </span>
+                            {activeContract.service_description}
+                          </p>
+                        )}
+                      </div>
+                    ) : (
+                      <p className="mt-3 text-sm text-slate-500">
+                        Sem contrato/permuta registrada ainda.
+                      </p>
+                    )}
+                  </li>
+                )
+              })}
+            </ul>
+          )}
+        </>
+      )}
     </div>
   )
 }
@@ -658,6 +774,114 @@ function StatCard({
       <p className="text-xs text-slate-400">{label}</p>
       <p className={`mt-2 text-xl font-bold sm:text-2xl ${toneClass}`}>{value}</p>
     </div>
+  )
+}
+
+function formatBRLCompact(value: number) {
+  if (value >= 1000) return `${(value / 1000).toFixed(value % 1000 === 0 ? 0 : 1)}k`
+  return value.toLocaleString('pt-BR')
+}
+
+/** Barras verticais finas, topo arredondado, ancoradas na base — um único
+ * gráfico, uma única série (faturamento), sem necessidade de legenda. Mês
+ * atual em destaque (barra mais clara + rótulo do eixo em negrito). */
+function MonthlyRevenueChart({
+  data,
+}: {
+  data: { key: string; label: string; total: number; isCurrent: boolean }[]
+}) {
+  const max = Math.max(1, ...data.map((d) => d.total))
+  const chartH = 160
+  const barW = 22
+  const gap = 10
+  const w = data.length * (barW + gap)
+
+  return (
+    <div className="overflow-x-auto">
+      <svg
+        viewBox={`0 0 ${w} ${chartH + 28}`}
+        width={w}
+        height={chartH + 28}
+        role="img"
+        aria-label="Faturamento por mês"
+      >
+        <line
+          x1={0}
+          y1={chartH}
+          x2={w}
+          y2={chartH}
+          stroke="currentColor"
+          className="text-slate-800"
+          strokeWidth={1}
+        />
+        {data.map((d, i) => {
+          const x = i * (barW + gap)
+          const h = Math.max(2, (d.total / max) * (chartH - 24))
+          const y = chartH - h
+          return (
+            <g key={d.key}>
+              {d.total > 0 && (
+                <text
+                  x={x + barW / 2}
+                  y={y - 6}
+                  textAnchor="middle"
+                  className="fill-slate-400"
+                  fontSize={9}
+                >
+                  {formatBRLCompact(d.total)}
+                </text>
+              )}
+              <rect
+                x={x}
+                y={y}
+                width={barW}
+                height={h}
+                rx={4}
+                className={d.isCurrent ? 'fill-emerald-400' : 'fill-emerald-700/60'}
+              />
+              <text
+                x={x + barW / 2}
+                y={chartH + 16}
+                textAnchor="middle"
+                className={d.isCurrent ? 'fill-emerald-300 font-semibold' : 'fill-slate-500'}
+                fontSize={10}
+              >
+                {d.label}
+              </text>
+            </g>
+          )
+        })}
+      </svg>
+    </div>
+  )
+}
+
+/** Barras horizontais, uma por cliente, ordenadas por valor — cabe nome
+ * longo sem cortar, mesma lógica de série única (sem legenda). */
+function ClientRevenueChart({ data }: { data: { name: string; total: number }[] }) {
+  if (data.length === 0) {
+    return <p className="text-sm text-slate-500">Sem receita em dinheiro lançada pro mês atual ainda.</p>
+  }
+  const max = Math.max(1, ...data.map((d) => d.total))
+  return (
+    <ul className="space-y-2.5">
+      {data.map((d) => (
+        <li key={d.name} className="flex items-center gap-2">
+          <span className="w-24 shrink-0 truncate text-xs text-slate-400" title={d.name}>
+            {d.name}
+          </span>
+          <div className="h-3 flex-1 rounded-full bg-slate-800">
+            <div
+              className="h-3 rounded-full bg-emerald-500"
+              style={{ width: `${Math.max(4, (d.total / max) * 100)}%` }}
+            />
+          </div>
+          <span className="w-16 shrink-0 text-right text-xs font-medium text-emerald-300">
+            {formatBRLCompact(d.total)}
+          </span>
+        </li>
+      ))}
+    </ul>
   )
 }
 

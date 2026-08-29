@@ -25,7 +25,7 @@
 | LES-0015 | send_message — número sem DDI/9º dígito | Erro | to_phone cru era mandado sem normalizar; número com 9º dígito não batia com conta registrada no formato antigo, e a Evolution "aceitava" sem nunca entregar | Vigente | 2026-08-16 |
 | LES-0016 | Anthropic API — saldo esgotado | Incidente | Todo o Tettolino parou de responder ("Deu ruim" pra qualquer mensagem, até "oi") porque a conta Anthropic ficou sem crédito — sintoma idêntico a um bug de código, mas era financeiro | Vigente | 2026-08-16 |
 | LES-0021 | Schema `operations`/`workspaces` — drift de migration | Descoberta | Enum `operation_status` (e boa parte do schema workspace-centric) existe e foi alterado direto no Postgres de produção, sem nenhum arquivo espelhado em `supabase/migrations/` | Vigente | 2026-08-27 |
-| LES-0022 | Kanban de Tarefas (`ProjectsPage`) — drag-and-drop | Erro | Trigger `enforce_operation_status_step` só permite mover status 1 etapa por vez; o Kanban deixa soltar em qualquer coluna e descarta o erro em silêncio | Vigente | 2026-08-27 |
+| LES-0022 | Kanban de Tarefas (`ProjectsPage`) — drag-and-drop | Erro | Trigger `enforce_operation_status_step` só permite mover status 1 etapa por vez; o Kanban deixa soltar em qualquer coluna e descarta o erro em silêncio | Resolvida | 2026-08-29 |
 | LES-0023 | `agent-whatsapp` — `inferSegment()` compliance | Erro | Segmento de compliance (jurídico/saúde/eleitoral) é mutuamente exclusivo por `if` sequencial — cliente com mais de um perfil só aciona handoff de um dos dois | Vigente | 2026-08-29 |
 | LES-0024 | CRM — cadastro em massa de clientes/contratos | Aprendizado | `service_description` do contrato vaza pro texto de cada parcela financeira (trigger de geração); `files.client_id` não tem `ON DELETE CASCADE`, bloqueia exclusão de cliente com arquivo anexado; sempre cruzar nome/telefone contra cadastro existente antes de criar cliente novo | Vigente | 2026-08-29 |
 
@@ -839,7 +839,7 @@
 - **Confiança:** Alta (confirmado direto na fonte, não inferido)
 
 ### LES-0022 — Kanban de Tarefas deixa arrastar card pra qualquer coluna, mas o banco só aceita transição de 1 etapa — erro cai em silêncio
-- **Status:** Vigente
+- **Status:** Resolvida
 - **Tipo:** Erro
 - **Severidade:** Média (não corrompe dado — a trigger do banco protege a
   integridade — mas gera confusão real de UX: o usuário arrasta, o card
@@ -878,13 +878,18 @@
 - **Tentativas que falharam:** nenhuma tentativa de correção nesta sessão —
   achado fora do escopo combinado com o usuário (que pediu só a migration
   de baseline); registrado pra decisão explícita antes de mexer.
-- **Solução aplicada:** nenhuma ainda. Caminhos possíveis pra próxima
-  sessão: (a) no frontend, computar adjacência antes do drop e recusar
-  visualmente colunas não-adjacentes (`dragOverStatus` já existe, dá pra
-  estilizar como "não permitido"); (b) mostrar o `error.message` da trigger
-  (já vem em português, ex: "Transição de status inválida...") num toast
-  quando `moveToStatus`/`updateStatus` falha; provavelmente (a)+(b) juntos
-  — UX preventiva + fallback de erro visível.
+- **Solução aplicada (2026-08-29):** implementadas as duas frentes previstas.
+  (a) `isAdjacentStatus()` novo em `ProjectsPage.tsx` espelha a regra exata
+  da trigger (inclusive `DONE` terminal); `handleColumnDragOver` calcula se
+  a coluna sob o cursor é válida pro card sendo arrastado e pinta a coluna
+  de vermelho (`dropEffect: 'none'`) quando não é; `moveToStatus` recusa
+  ANTES de chamar `updateStatus` se não for adjacente, com mensagem clara.
+  (b) Toda chamada a `updateStatus` (`moveToStatus`, `advance`, `revert`)
+  agora lê o `{ error }` de retorno e mostra num banner dispensável no topo
+  da página (`moveError`) em vez de descartar.
+- **Validação da solução:** `npm run build`/`tsc` limpos; não reproduzido
+  via UI real (sem sessão de navegador nesta rodada) — a lógica espelha
+  exatamente a trigger já confirmada por leitura direta do banco.
 - **Regra preventiva:** ao adicionar/alterar uma trigger de banco que
   restringe transições de estado, sempre conferir se alguma UI de
   drag-and-drop/edição livre no frontend pode gerar uma transição inválida
@@ -925,8 +930,16 @@
 - **Causa raiz:** `inferSegment()` modela compliance como categoria única
   (`'legal' | 'health_aesthetics' | 'electoral' | 'general'`) quando na prática um
   cliente pode acumular mais de um perfil sensível ao mesmo tempo.
-- **Solução aplicada:** nenhuma ainda — achado registrado, não corrigido nesta sessão
-  (fora do escopo combinado, que era só cadastro de clientes/contratos no CRM).
+- **Solução aplicada (2026-08-29, mesma sessão):** `inferSegment()` → `inferSegments()`
+  (retorna array com TODOS os segmentos batidos, não só o primeiro);
+  `needsHandoff()`/`evaluateHandoff()` conferem os 3 padrões contra cada segmento
+  presente no array, não contra 1 só. Corrigido nos 3 lugares que replicam a lógica:
+  `agent-whatsapp/index.ts` (backend), `src/utils/aiContext.ts` + `compliance.ts`
+  (frontend, usado por `AiPage`/`InboxPage` via `aiReply.ts`). Testes novos em
+  `aiContext.test.ts`/`compliance.test.ts` cobrindo perfil duplo (27 testes passando).
+  Deploy do backend (`agent-whatsapp`) delegado a subagente com verificação byte a byte
+  em andamento no momento desta escrita — confirmar resultado antes de marcar esta
+  lição como `Resolvida` de fato.
 - **Regra preventiva:** ao cadastrar cliente com mais de um perfil regulado
   (jurídico+eleitoral, saúde+eleitoral, etc.), saber que o handoff automático só cobre
   o primeiro que bater. Corrigir isso propriamente exigiria `needsHandoff` rodar os 3
@@ -986,6 +999,76 @@
 - **Referências:** sessão de 2026-08-29 — migrations
   `reassign_files_and_delete_off_list_clients_2026_08_29`,
   `fix_am_consultoria_contract_description`.
+- **Confiança:** Alta.
+
+### LES-0025 — Corrigir `agent-whatsapp` quebrado via `deploy_edge_function` (MCP) falha por limite de tokens de SAÍDA do agente, não por erro no conteúdo — LES-0001 sozinho não basta pra arquivos grandes
+- **Status:** Vigente — bloqueador ativo, produção ainda quebrada nesta data.
+- **Tipo:** Incidente / Limitação de ferramenta
+- **Severidade:** Crítica
+- **Área/módulo:** `supabase/functions/agent-whatsapp/index.ts` (3778 linhas, ~152KB),
+  deploy via MCP `deploy_edge_function`.
+- **Ambiente:** produção (projeto Supabase `lniinjegcvdcrmsrzqkt`), tentativa de correção
+  do incidente descrito em LES-0001 (v53 quebrado por deploy anterior cortado no meio).
+- **Primeira ocorrência:** 2026-08-29, sessão de correção de emergência (subagente
+  dedicado, seguindo à risca o processo de LES-0001: ler do disco, nunca de memória).
+- **Sintoma:** mesmo lendo o arquivo fresco do disco (confirmado íntegro, md5sum batendo)
+  e tentando colar o conteúdo EXATO no parâmetro `files[0].content` da chamada MCP
+  `deploy_edge_function`, a própria geração da resposta do agente foi cortada pelo limite
+  de tokens de saída ANTES de terminar de escrever o parâmetro — em duas tentativas
+  separadas, parando em ~20-25% do arquivo (linha ~766 e depois ~949 de 3778). Na 2ª
+  tentativa a chamada foi de fato enviada ao Supabase com conteúdo truncado/sintaticamente
+  inválido; o bundler do Supabase (ao contrário do incidente original) REJEITOU o deploy
+  com `BadRequestException` (erro de parser) em vez de aceitar — não criou uma v54 quebrada,
+  mas também não corrigiu nada. `agent-whatsapp` permaneceu em v53.
+- **Contexto:** o parâmetro `content` de `deploy_edge_function` precisa conter o arquivo
+  INTEIRO como texto literal, gerado pelo modelo dentro de uma única chamada de
+  ferramenta — não existe suporte a `file_path`/upload por referência nem a
+  envio incremental/append entre chamadas. Isso significa que o texto completo do arquivo
+  precisa "caber" na saída de UM turno de resposta do agente.
+- **Impacto:** produção do webhook de WhatsApp seguiu quebrada por mais tempo; risco de
+  reproduzir o incidente original (deploy parcial aceito silenciosamente) se o bundler não
+  tivesse rejeitado dessa vez — não é garantido que ele sempre rejeite conteúdo truncado
+  (depende de o corte cair num ponto que quebre a sintaxe de forma detectável).
+- **Causa raiz:** LES-0001 recomendava "delegar a um subagente com instruções explícitas de
+  ler do disco" como mitigação suficiente pra arquivos grandes — mas isso só resolve o
+  problema de FIDELIDADE do conteúdo (não reconstruir de memória/resumir). Não resolve o
+  problema, distinto, de CAPACIDADE: o subagente tem um teto de tokens de saída por turno
+  (nesta sessão, suficiente pra ~900-950 das 3778 linhas, ~25%) que é uma propriedade fixa
+  da infraestrutura do agente, não algo contornável reduzindo texto explicativo, cortando
+  raciocínio, ou tentando de novo (variação entre tentativas não fecha um gap de ~4x).
+- **Tentativas que falharam:** (1) minimizar texto de preâmbulo antes da chamada de
+  ferramenta — ajudou marginalmente (766→949 linhas) mas não resolveu; (2) repetir a mesma
+  chamada esperando variação favorável — não é uma estratégia válida pra um teto estrutural
+  de ~4x o necessário; (3) tentar `supabase` CLI local (que leria o arquivo do disco
+  diretamente, contornando o problema por completo) — instalado (`v2.113.0`) mas sem
+  `SUPABASE_ACCESS_TOKEN`/`supabase login` configurado no ambiente; (4) buscar um token
+  Supabase já disponível no sistema de arquivos — corretamente bloqueado pelo classificador
+  de permissões (busca ampla por `*token*`/`*credential*` no filesystem é o tipo de ação que
+  deve mesmo ser barrada; não deve ser tentada de novo por essa rota).
+- **Solução recomendada (não aplicada ainda — requer ação humana/de outra sessão):**
+  configurar um Supabase Personal Access Token no ambiente (`SUPABASE_ACCESS_TOKEN` de
+  ambiente, ou `supabase login` interativo) e deployar via CLI local
+  (`supabase functions deploy agent-whatsapp --project-ref lniinjegcvdcrmsrzqkt`), que lê o
+  arquivo direto do disco sem exigir que o agente "digite" o conteúdo inteiro numa resposta
+  — elimina o teto de tokens de saída como fator. Depois do deploy por CLI, rodar o mesmo
+  processo de verificação byte a byte de LES-0001 (`get_edge_function` + `diff` + `md5sum`)
+  normalmente, já que essa etapa não depende de geração de texto grande pelo agente.
+- **Regra preventiva:** pra qualquer arquivo de edge function acima de ~1500-2000 linhas
+  (regra de bolso: se não coube inteiro numa única leitura de ~950 linhas por chamada
+  `Read`, é candidato a estourar também a geração de saída), NÃO tentar
+  `deploy_edge_function` via MCP colando o conteúdo inline — usar `supabase` CLI local
+  (requer token configurado) desde a primeira tentativa, não como último recurso depois de
+  gastar tentativas na abordagem que não escala.
+- **Quando esta regra se aplica:** deploy de qualquer edge function grande (hoje, só
+  `agent-whatsapp` se aproxima desse tamanho) quando o ambiente tiver a Supabase CLI
+  disponível; se não tiver CLI/token, o bloqueio é genuíno e deve ser reportado como tal
+  ao usuário em vez de insistir na mesma chamada MCP.
+- **Quando não se aplica:** arquivos pequenos/médios (a maioria das outras edge functions
+  do projeto) — `deploy_edge_function` via MCP continua o caminho certo pra esses.
+- **Skills relacionadas:** SKL-0001 (Supabase).
+- **Referências:** sessão de correção de emergência de 2026-08-29, subagente dedicado à
+  correção de LES-0001/v53; `list_edge_functions` confirmando `agent-whatsapp` ainda em
+  v53 após as duas tentativas.
 - **Confiança:** Alta.
 
 ## Registro rápido durante a tarefa

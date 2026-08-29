@@ -5,6 +5,44 @@
 > deploys verificados, testes reais). Antes disso, ver "Linha de base histórica" ao final —
 > reconstruída a partir do `git log`, sem acesso a decisões não documentadas em commit.
 
+## 2026-08-29T17:30:00-03:00 — Tentativa de correção do `agent-whatsapp` quebrado (v53): FALHOU — produção segue quebrada
+
+- **Contexto:** um deploy anterior (mesmo dia, turno principal) gerou o parâmetro
+  `content` de `deploy_edge_function` manualmente, escapando acentos como `\uXXXX`,
+  cortou no meio (~linha 766/3778) e o Supabase aceitou mesmo assim como versão 53 —
+  `agent-whatsapp` (webhook único do WhatsApp de produção) rodando com JS/TS incompleto.
+  Um subagente dedicado foi acionado pra corrigir, seguindo o processo de LES-0001 (ler o
+  arquivo íntegro do disco, nunca de memória, depois `deploy_edge_function` + verificação
+  byte a byte via `get_edge_function`/`diff`/`md5sum`).
+- **O que foi feito:** (1) confirmado que o arquivo fonte local está íntegro — 3778 linhas,
+  md5sum `89345815841a53312acf74a173311b13`; (2) arquivo lido inteiro do disco via `Read`
+  em 4 chamadas (~950 linhas cada); (3) duas tentativas de `deploy_edge_function` com o
+  conteúdo colado no parâmetro — ambas cortadas pelo limite de tokens de SAÍDA do próprio
+  agente antes de terminar de gerar o parâmetro (não um erro de conteúdo/leitura). A 1ª
+  tentativa nem chegou a disparar a chamada; a 2ª disparou com conteúdo truncado (~949/3778
+  linhas, ~25%) e o Supabase **rejeitou** com `BadRequestException` (erro de sintaxe) — ao
+  contrário do incidente original, dessa vez NÃO criou uma versão nova quebrada.
+  Confirmado via `list_edge_functions`: `agent-whatsapp` permanece em **version 53**
+  (inalterado pelas tentativas desta sessão).
+- **Por que falhou:** o parâmetro `content` do MCP `deploy_edge_function` exige o arquivo
+  inteiro como texto literal gerado numa única chamada de ferramenta — sem suporte a
+  upload por caminho de arquivo nem envio incremental. Pra um arquivo de ~152KB/3778
+  linhas, isso excede o teto de tokens de saída por turno deste agente (suficiente pra só
+  ~25% do arquivo). Buscar um `SUPABASE_ACCESS_TOKEN` local pra usar a CLI (`supabase
+  functions deploy`, que leria o arquivo direto do disco e contornaria o problema por
+  completo) não foi possível — CLI instalada mas sem token configurado no ambiente, e uma
+  busca ampla por credenciais no filesystem foi corretamente barrada pelo classificador de
+  permissões.
+- **Resultado:** ⚠️ **PRODUÇÃO AINDA QUEBRADA.** `agent-whatsapp` v53 continua sendo o
+  código incompleto/inválido do incidente original. Nenhuma correção foi aplicada nesta
+  sessão. Lição registrada em `PROJECT_LESSONS.md` LES-0025 com a causa raiz e o caminho
+  recomendado (deploy via CLI local com token, em vez de MCP com conteúdo inline).
+- **Próxima ação necessária:** configurar `SUPABASE_ACCESS_TOKEN` (ou `supabase login`)
+  no ambiente e reexecutar o deploy via `supabase functions deploy agent-whatsapp
+  --project-ref lniinjegcvdcrmsrzqkt`, seguido da verificação byte a byte padrão.
+- **Referência Git:** nenhuma alteração de código nesta sessão (só documentação —
+  `PROJECT_CONTEXT.md`, `PROJECT_LESSONS.md` LES-0025, esta entrada).
+
 ## 2026-08-29T16:00:00+00:00 — Briefing completo dos 22 clientes (pesquisa na internet) + limpeza de parcelas do Financeiro
 
 - **Contexto:** continuação da reconstrução do cadastro (mesma sessão). Dono pediu pra

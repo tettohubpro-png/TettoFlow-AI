@@ -96,6 +96,7 @@ export interface Client {
   state: string | null
   origin: string | null
   notes: string | null
+  contact_name: string | null
   social_links: ClientSocialLinks
   has_instagram: boolean | null
   instagram_handle: string | null

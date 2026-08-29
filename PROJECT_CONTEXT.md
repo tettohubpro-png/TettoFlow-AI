@@ -223,7 +223,15 @@ CRM (clientes/contatos/contratos), tarefas/operações em kanban, financeiro bá
 atendimento automático a cliente com delay e detecção de resposta humana, Tettolino com
 tool-calling completo (busca/cria/edita cliente, tarefa, operação, mensagem, equipe,
 conhecimento), monitoramento de grupos com regras diferenciadas, base de conhecimento
-full-text (accent-insensitive), automação parcial de nota de pesar.
+full-text (accent-insensitive), automação parcial de nota de pesar. **Novo em
+2026-08-29**: funil de Prospecção (`/prospeccao`, tabela `clients` reaproveitada via
+`pipeline_stage`, conversão sem duplicar cadastro), aba de Parceiros no Financeiro,
+gráfico de faturamento por mês/cliente (SVG puro, sem lib externa) na Visão Geral do
+Financeiro, e página dedicada de perfil de prospect (`ClientBriefingPage` branca pra
+`ProspectProfilePage` quando `pipeline_stage !== 'WON'` — dono/responsável (`clients.
+contact_name`, coluna nova), presença digital editável, resumo de oportunidade — em vez
+de mostrar a UI de cliente fechado (Briefing/Gravações/Contrato) pra quem ainda é só
+prospect).
 
 ## Trabalho em andamento
 - Integração Canva (OAuth) — aguardando o cliente criar a integração em
@@ -250,30 +258,29 @@ full-text (accent-insensitive), automação parcial de nota de pesar.
    bot de cliente e pro Tettolino.
 4. **Preencher o roteiro de vendas do lead-intake** (`SALES_SCRIPT` em `agent-whatsapp`) —
    ainda é texto placeholder.
-5. Esclarecer `whatsapp-webhook`, `client-onboarding` e uso real do n8n (auditoria
-   separada, não coberta a fundo aqui).
+5. Esclarecer `whatsapp-webhook` e uso real do n8n (`client-onboarding` já resolvido —
+   morto, deletado em 2026-08-29, ver LES-0021).
 6. Revisar 3 funções `SECURITY DEFINER` executáveis por `anon`/`authenticated`
    (`bootstrap_my_workspace`, `has_workspace_role`, `is_workspace_member`) e mover `pg_net`
    pra fora do schema `public` (achados do advisor de segurança do Supabase, não corrigidos).
-7. Corrigir o Kanban de Tarefas pra respeitar a trigger de transição de status (recusar
-   drop em coluna não-adjacente e/ou mostrar o erro do Postgres) — ver
-   `PROJECT_LESSONS.md` LES-0022.
-8. Implementar a UI de "Parceiros" no Financeiro (botão/seção separada de clientes
-   pagantes) — pendência explícita do dono pra Bom Corte, Seu Churras, Clínica Dos
-   Óculos, JotaBikeShop, Vagner Miranda.
+7. ~~Corrigir o Kanban de Tarefas~~ — **feito em 2026-08-29** (LES-0022): recusa drop em
+   coluna não-adjacente (visual + no drop) e mostra o erro real quando falha.
+8. ~~Implementar a UI de "Parceiros" no Financeiro~~ — **feito em 2026-08-29**: aba
+   "Parceiros" nova, lista Bom Corte/Jefferson Teixeira/Clínica Dos Óculos/JotaBikeShop/
+   Vagner Miranda/Seu Churras com contrato/permuta de cada um; também corrigiu bug real
+   (permuta contando como receita em dinheiro no card "Receita (mês)").
 9. Confirmar dia de vencimento de Nava Clinic/Dra. Karol Facundo/ShotFire (assumido dia
    10 por padrão dos contratos vizinhos, não confirmado explicitamente pelo dono) e
    definir o valor da permuta do Arq. Jefferson Teixeira (início previsto set/2026).
-10. **`inferSegment()` em `agent-whatsapp` só detecta 1 segmento de compliance por
-    cliente** (jurídico/saúde/eleitoral são mutuamente exclusivos, primeiro match
-    vence) — cliente com mais de um perfil (ex: Vagner Miranda, advogado E
-    pré-candidato) só aciona handoff de um dos dois. Achado em 2026-08-29, não
-    corrigido. Ver `PROJECT_LESSONS.md`.
-11. **`client_ai_memory` não tem constraint única em `(client_id, title)`** — permite
-    duplicar campos de briefing (`Briefing — História`, etc.) sem erro se a mesma
-    inserção rodar 2x. Já aconteceu uma vez (Br Consultoria, 2026-08-29, corrigido na
-    hora). Considerar `UNIQUE(client_id, title)` ou um `upsert` de verdade no lugar de
-    `insert` simples nesses fluxos.
+10. ~~`inferSegment()` só detecta 1 segmento de compliance por cliente~~ — **corrigido em
+    2026-08-29** nos 3 lugares que replicavam a lógica (`agent-whatsapp` backend,
+    `src/utils/aiContext.ts`+`compliance.ts` frontend, usado por `AiPage`/`InboxPage`):
+    virou `inferSegments()` (lista), `needsHandoff`/`evaluateHandoff` conferem todos os
+    segmentos presentes, não só o primeiro. Testado (27 testes, 2 novos cobrindo o caso
+    de perfil duplo). Deploy do backend com verificação byte a byte — ver
+    `PROJECT_LESSONS.md` LES-0023 pro status exato do deploy.
+11. ~~`client_ai_memory` sem constraint única em `(client_id, title)`~~ — **corrigido em
+    2026-08-29**: `UNIQUE(client_id, title)` adicionada via migration.
 12. **Todos os 22 clientes ativos têm briefing (história/objetivos/persona/restrições)
     preenchido**, pesquisado na internet em 2026-08-29 — mas ShotFire e Dra. Karol
     Facundo ainda estão com "a confirmar" no ramo de atividade, precisam de resposta
@@ -308,6 +315,18 @@ full-text (accent-insensitive), automação parcial de nota de pesar.
   implantado — ver `PROJECT_LESSONS.md` LES-0001.
 
 ## Problemas conhecidos e riscos
+- 🔴 **CRÍTICO — `agent-whatsapp` EM PRODUÇÃO ESTÁ QUEBRADO (v53, desde 2026-08-29).**
+  Um deploy anterior gerou o parâmetro `content` manualmente (escapando acentos como
+  `\uXXXX`), a chamada foi cortada no meio (~linha 766/3778, dentro de `resolveClient`) e o
+  Supabase aceitou mesmo assim como v53 — arquivo incompleto/quebrado rodando no webhook
+  único do WhatsApp de produção. Duas tentativas de correção nesta sessão (deploy via MCP
+  `deploy_edge_function` com o conteúdo lido fresco do disco) **falharam por limite de
+  tokens de saída do próprio agente**, não por erro no conteúdo — ver `PROJECT_LESSONS.md`
+  LES-0025 pra causa raiz e caminho recomendado (Supabase CLI local com
+  `SUPABASE_ACCESS_TOKEN`, em vez de colar o conteúdo inteiro num parâmetro de tool call).
+  **Ainda não corrigido — produção segue quebrada.** Confirmar com `list_edge_functions`
+  (esperado: `agent-whatsapp` version > 53 quando corrigido) e o processo de verificação
+  byte a byte de LES-0001 antes de considerar resolvido.
 - 13/15 clientes ativos sem `client_contacts` → risco de duplicidade recorrente.
 - `pg_net` no schema `public` (advisor de segurança).
 - 3 funções `SECURITY DEFINER` chamáveis por `anon`/`authenticated` sem revisão confirmada

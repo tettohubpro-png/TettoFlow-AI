@@ -36,7 +36,7 @@ describe('generateContextualReply', () => {
       message: 'Posso processar meu vizinho?',
       memories,
       operations: [],
-      segment: 'legal',
+      segments: ['legal'],
     })
     expect(r.handoff).toBe(true)
   })

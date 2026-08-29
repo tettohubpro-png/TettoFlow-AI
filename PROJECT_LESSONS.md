@@ -26,6 +26,8 @@
 | LES-0016 | Anthropic API — saldo esgotado | Incidente | Todo o Tettolino parou de responder ("Deu ruim" pra qualquer mensagem, até "oi") porque a conta Anthropic ficou sem crédito — sintoma idêntico a um bug de código, mas era financeiro | Vigente | 2026-08-16 |
 | LES-0021 | Schema `operations`/`workspaces` — drift de migration | Descoberta | Enum `operation_status` (e boa parte do schema workspace-centric) existe e foi alterado direto no Postgres de produção, sem nenhum arquivo espelhado em `supabase/migrations/` | Vigente | 2026-08-27 |
 | LES-0022 | Kanban de Tarefas (`ProjectsPage`) — drag-and-drop | Erro | Trigger `enforce_operation_status_step` só permite mover status 1 etapa por vez; o Kanban deixa soltar em qualquer coluna e descarta o erro em silêncio | Vigente | 2026-08-27 |
+| LES-0023 | `agent-whatsapp` — `inferSegment()` compliance | Erro | Segmento de compliance (jurídico/saúde/eleitoral) é mutuamente exclusivo por `if` sequencial — cliente com mais de um perfil só aciona handoff de um dos dois | Vigente | 2026-08-29 |
+| LES-0024 | CRM — cadastro em massa de clientes/contratos | Aprendizado | `service_description` do contrato vaza pro texto de cada parcela financeira (trigger de geração); `files.client_id` não tem `ON DELETE CASCADE`, bloqueia exclusão de cliente com arquivo anexado; sempre cruzar nome/telefone contra cadastro existente antes de criar cliente novo | Vigente | 2026-08-29 |
 
 ## Regras preventivas consolidadas
 
@@ -900,6 +902,91 @@
 - **Confiança:** Alta na causa raiz (lida direto no código-fonte e na
   definição da trigger); Média no impacto real em produção (não
   reproduzido via UI, não confirmado se já afetou o dono/equipe).
+
+### LES-0023 — `inferSegment()` do Tettolino só detecta 1 segmento de compliance por cliente, mesmo quando o cliente tem mais de um perfil sensível
+- **Status:** Vigente
+- **Tipo:** Erro
+- **Severidade:** Média-Alta (risco de compliance real — TSE/OAB/ANVISA — não é bug
+  visível no dia a dia, só aparece quando o conteúdo errado passa sem handoff)
+- **Área/módulo:** `supabase/functions/agent-whatsapp/index.ts`, função `inferSegment()`
+  (~linha 3165) e `needsHandoff()`
+- **Primeira ocorrência:** código pré-existente; descoberto nesta sessão, 2026-08-29, ao
+  cadastrar o cliente Vagner Miranda (advogado E pré-candidato a prefeito).
+- **Sintoma:** `inferSegment()` roda 3 `if` sequenciais sobre o texto da memória do
+  cliente (`oab|jurídic|advogad` → `legal`; `anvisa|estética|saúde|clínica` →
+  `health_aesthetics`; `eleição|tse|candidat` → `electoral`) e retorna no primeiro match.
+  Um cliente cujo perfil bate em mais de uma categoria (ex: advogado que também é
+  candidato) só é classificado na primeira que aparecer no código — `legal` sempre vence
+  de `electoral` nesse caso, porque é checado antes.
+- **Impacto:** se esse cliente (ou alguém na conversa dele) mandar mensagem com conteúdo
+  de propaganda eleitoral, o handoff de compliance eleitoral (TSE) **não dispara** — só
+  dispararia o de aconselhamento jurídico específico (OAB), que é um padrão de texto
+  diferente.
+- **Causa raiz:** `inferSegment()` modela compliance como categoria única
+  (`'legal' | 'health_aesthetics' | 'electoral' | 'general'`) quando na prática um
+  cliente pode acumular mais de um perfil sensível ao mesmo tempo.
+- **Solução aplicada:** nenhuma ainda — achado registrado, não corrigido nesta sessão
+  (fora do escopo combinado, que era só cadastro de clientes/contratos no CRM).
+- **Regra preventiva:** ao cadastrar cliente com mais de um perfil regulado
+  (jurídico+eleitoral, saúde+eleitoral, etc.), saber que o handoff automático só cobre
+  o primeiro que bater. Corrigir isso propriamente exigiria `needsHandoff` rodar os 3
+  conjuntos de padrão sempre, não só o do segmento "vencedor" de `inferSegment`.
+- **Quando esta regra se aplica:** qualquer cliente com perfil múltiplo (ex: médico que
+  também é candidato, advogado que também atua em estética).
+- **Skills relacionadas:** SKL-0004 (Tettolino/Hermes)
+- **Referências:** sessão de 2026-08-29, cliente Vagner Miranda.
+- **Confiança:** Alta (lido direto no código-fonte).
+
+### LES-0024 — Cadastro em massa de clientes/contratos: 3 armadilhas reais encontradas
+- **Status:** Vigente
+- **Tipo:** Aprendizado
+- **Severidade:** Média
+- **Área/módulo:** `client_contracts` (trigger `generate_contract_financial_entries`),
+  `files.client_id` (FK), fluxo de criação de cliente novo no CRM.
+- **Primeira ocorrência:** 2026-08-29, ao recadastrar os 21+1 clientes reais da agência.
+- **Sintoma 1:** o texto completo de `client_contracts.service_description` é copiado
+  literalmente pra dentro da `description` de CADA parcela gerada em
+  `financial_entries` (`COALESCE(service_description, title) || ' — parcela X/Y'`). Se
+  `service_description` tiver o texto integral de uma cláusula contratual, todas as 12
+  parcelas ficam com um parágrafo inteiro de texto jurídico como "descrição", ilegível
+  numa lista de Financeiro.
+- **Solução aplicada 1:** manter `service_description` curto (1 linha, resumo do
+  pacote de serviço); guardar o texto jurídico completo como entrada em
+  `client_ai_memory` (categoria `BRIEFING`) — separa "resumo operacional" de "cláusula
+  legal completa", e ainda alimenta o contexto do Tettolino/bot de cliente.
+- **Sintoma 2:** `files.client_id` referencia `clients(id)` **sem `ON DELETE CASCADE`**
+  (diferente de `client_contacts`, `conversations`, `client_contracts`,
+  `financial_entries`, que têm cascade). Tentar apagar um cliente com qualquer arquivo
+  anexado (mesmo um marcador de pasta vazia criado no onboarding) falha com
+  `foreign key constraint "files_client_id_fkey"`.
+- **Solução aplicada 2:** antes de apagar um cliente, checar
+  `select count(*) from files where client_id = X` — se houver arquivo real (não só
+  marcador de pasta), realocar (`UPDATE files SET client_id = <cliente certo>`) pro
+  cliente correto em vez de perder o anexo; se for só o marcador vazio de onboarding,
+  apagar a linha de `files` antes do cliente.
+- **Sintoma 3:** ao pedir pra "apagar os clientes que não estão na lista", uma checagem
+  rápida revelou que 5 dos "descartáveis" tinham conversa real de WhatsApp com histórico
+  (incluindo 2 que eram, na verdade, os donos de clientes ativos da lista — descoberto só
+  ao cruzar telefone/contexto, não pelo nome). Apagar sem checar teria perdido histórico
+  de conversa real e/ou duplicado contato de cliente ativo.
+- **Solução aplicada 3:** antes de qualquer exclusão em lote de cliente, cruzar
+  `client_contacts`/`conversations`/`client_ai_memory` de cada candidato — nome parecido
+  ou telefone batendo com um cliente da lista "oficial" é sinal de que não é lixo, é
+  duplicidade a **mesclar/renomear**, não apagar.
+- **Regra preventiva:** em qualquer exclusão de cliente, rodar um checklist fixo antes:
+  (1) `files` sem cascade — realocar ou limpar; (2) cruzar telefone/nome contra a lista
+  oficial de clientes antes de assumir "é lixo"; (3) migrations de `apply_migration` são
+  transacionais — se uma parte falhar (ex: FK), a transação inteira reverte, incluindo
+  passos anteriores que pareciam ter funcionado (ex: `UPDATE` de realocação de arquivo
+  dentro da mesma chamada que depois falhou no `DELETE`) — reaplicar tudo junto, não só a
+  parte que faltou.
+- **Quando esta regra se aplica:** qualquer limpeza/consolidação de cadastro de cliente
+  neste CRM.
+- **Skills relacionadas:** SKL-0001 (Supabase)
+- **Referências:** sessão de 2026-08-29 — migrations
+  `reassign_files_and_delete_off_list_clients_2026_08_29`,
+  `fix_am_consultoria_contract_description`.
+- **Confiança:** Alta.
 
 ## Registro rápido durante a tarefa
 

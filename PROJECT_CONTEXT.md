@@ -3,10 +3,18 @@
 ## Metadados
 - Projeto: TettoFlow AI OS (produto interno da agência TettoHub)
 - Repositório: `tettohubpro-png/TettoFlow-AI` (GitHub, remote `origin`)
-- Última atualização: 2026-08-27T00:00:00+00:00
+- Última atualização: 2026-08-29T14:00:00+00:00
 - Branch de referência: `claude/vps-access-connection-z05wyj` — ver Pendência #0 sobre
   divergência com `main`
 - Status geral: em produção, uso ativo diário pela agência (não é protótipo)
+
+## Dados jurídicos da agência (CONTRATADO em todos os contratos)
+- Razão social: **M G R Morais Serviços e Comércio**
+- CNPJ: 41.692.551/0001-40
+- Sede: Rua Edmundo Calheiros/Rua 5 – Parte I, nº 154, Bairro São Francisco, São Luís – MA
+- Telefone: (98) 99202-5756
+- Fonte: cláusula de qualificação do contrato da Am Consultoria, citada pelo dono em
+  2026-08-29 — mesmo texto deve se repetir nos contratos dos outros 20 clientes.
 
 ## Visão e objetivo
 CRM + sistema operacional interno da TettoHub (agência de marketing), com um agente de IA
@@ -53,9 +61,23 @@ equipe.
   Eduarda (social media), Lilian (design). Existem colaboradores de edição de vídeo
   (André, Marcos) com grupo de WhatsApp dedicado mas **não cadastrados no CRM** — gap
   conhecido, ver Pendências.
-- **Clientes da agência** — ~15 clientes ativos, ~7 leads em qualificação. Maioria dos
-  clientes ativos (13 de 15, verificado em 2026-08-13) **não tem telefone cadastrado em
-  `client_contacts`** — gap conhecido, ver Riscos.
+- **Clientes da agência** — **22 clientes ACTIVE, reconciliados e validados pelo dono em
+  2026-08-29** (lista fechada de 21 contratos + 1 parceiro adicional descoberto na
+  reconciliação): Am Consultoria, Br Consultoria, Bom Corte, Sacaria Maranhense, Q Ball,
+  Zed Restaurante, Jallem, Marservice, VitalMed, 3ERC, Ingest, Clínica Dos Óculos,
+  JotaBikeShop, Arq. Jefferson Teixeira, Ubrlancia, Dr Home Br, Nava Clinic,
+  Dra. Karol Facundo, ShotFire, Petit Four, Vagner Miranda, Seu Churras. MRR em dinheiro:
+  **R$ 12.700/mês** (14 clientes pagantes, contrato + parcelas de 12 meses geradas em
+  `client_contracts`/`financial_entries`). 4 clientes são **parceiros sem pagamento em
+  dinheiro** (Clínica Dos Óculos, JotaBikeShop, Vagner Miranda, Seu Churras — sem UI
+  dedicada ainda, ver Pendências). 2 são **permuta** (Bom Corte, R$550/mês abatendo
+  aluguel de R$1.500; Arq. Jefferson Teixeira, dono do prédio da sede, valor ainda não
+  definido). Toda a base anterior de clientes fora dessa lista (leads de teste, contatos
+  avulsos duplicados como "Adriano Costa"/"Mara Raquel" — que na verdade eram os donos de
+  Petit Four/Q Ball e viraram os próprios registros desses clientes — e duplicatas
+  arquivadas) foi **apagada** em 2026-08-29, a pedido do dono. A maioria ainda **não tem
+  telefone cadastrado em `client_contacts`** (só Am Consultoria/Q Ball/Petit Four têm,
+  reaproveitados de cadastros antigos) — gap conhecido, ver Riscos.
 
 ## Arquitetura atual
 
@@ -236,6 +258,17 @@ full-text (accent-insensitive), automação parcial de nota de pesar.
 7. Corrigir o Kanban de Tarefas pra respeitar a trigger de transição de status (recusar
    drop em coluna não-adjacente e/ou mostrar o erro do Postgres) — ver
    `PROJECT_LESSONS.md` LES-0022.
+8. Implementar a UI de "Parceiros" no Financeiro (botão/seção separada de clientes
+   pagantes) — pendência explícita do dono pra Bom Corte, Seu Churras, Clínica Dos
+   Óculos, JotaBikeShop, Vagner Miranda.
+9. Confirmar dia de vencimento de Nava Clinic/Dra. Karol Facundo/ShotFire (assumido dia
+   10 por padrão dos contratos vizinhos, não confirmado explicitamente pelo dono) e
+   definir o valor da permuta do Arq. Jefferson Teixeira (início previsto set/2026).
+10. **`inferSegment()` em `agent-whatsapp` só detecta 1 segmento de compliance por
+    cliente** (jurídico/saúde/eleitoral são mutuamente exclusivos, primeiro match
+    vence) — cliente com mais de um perfil (ex: Vagner Miranda, advogado E
+    pré-candidato) só aciona handoff de um dos dois. Achado em 2026-08-29, não
+    corrigido. Ver `PROJECT_LESSONS.md`.
 
 ## Decisões vigentes
 - Delay de 90s antes de responder cliente automaticamente (histórico de idas e voltas:

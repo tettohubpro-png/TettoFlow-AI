@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { FormEvent } from 'react'
 import { Link, useParams } from 'react-router-dom'
+import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/contexts/AuthContext'
 import { useClientBriefing } from '@/hooks/useClientBriefing'
 import { useDriveUpload } from '@/hooks/useDriveUpload'
@@ -17,7 +18,7 @@ import {
 import { buildDriveFolderName } from '@/utils/driveFolder'
 import type { BriefingFormData, ContractPeriodicity } from '@/types/database'
 
-type Tab = 'briefing' | 'gravacoes' | 'contrato' | 'visualizacao'
+type Tab = 'briefing' | 'gravacoes' | 'contrato' | 'visualizacao' | 'analise'
 
 function formHasContent(form: BriefingFormData) {
   return Object.values(form).some((v) => String(v).trim().length > 0)
@@ -184,6 +185,17 @@ export function ClientBriefingPage() {
           }`}
         >
           Visualização
+        </button>
+        <button
+          type="button"
+          onClick={() => setTab('analise')}
+          className={`min-h-11 flex-1 rounded-lg px-4 py-2.5 text-sm sm:flex-none ${
+            tab === 'analise'
+              ? 'bg-emerald-500/20 font-medium text-emerald-300'
+              : 'bg-slate-900 text-slate-400'
+          }`}
+        >
+          Análise
         </button>
       </div>
 
@@ -452,6 +464,121 @@ export function ClientBriefingPage() {
           clientStatus={client?.status}
           logoUrl={form.logo_url}
         />
+      )}
+
+      {tab === 'analise' && <AnaliseTab clientId={clientId} client={client} />}
+    </div>
+  )
+}
+
+function DigitalStatusBadge({
+  label,
+  known,
+  active,
+}: {
+  label: string
+  known: boolean | null
+  active?: boolean | null
+}) {
+  let tone = 'bg-slate-800 text-slate-400'
+  let text = 'Não verificado'
+  if (known === true) {
+    if (active === false) {
+      tone = 'bg-amber-500/15 text-amber-300'
+      text = 'Tem, mas desatualizado'
+    } else {
+      tone = 'bg-emerald-500/15 text-emerald-300'
+      text = 'Ativo'
+    }
+  } else if (known === false) {
+    tone = 'bg-red-500/15 text-red-300'
+    text = 'Não tem'
+  }
+  return (
+    <div className="rounded-lg border border-slate-800 bg-slate-900/50 p-3">
+      <p className="text-xs text-slate-500">{label}</p>
+      <span className={`mt-1 inline-block rounded-full px-2 py-0.5 text-xs ${tone}`}>{text}</span>
+    </div>
+  )
+}
+
+function AnaliseTab({
+  clientId,
+  client,
+}: {
+  clientId: string | undefined
+  client: import('@/types/database').Client | null
+}) {
+  const [analysis, setAnalysis] = useState<string | null>(null)
+  const [loadingAnalysis, setLoadingAnalysis] = useState(true)
+
+  useEffect(() => {
+    if (!clientId) return
+    let cancelled = false
+    setLoadingAnalysis(true)
+    supabase
+      .from('client_ai_memory')
+      .select('content')
+      .eq('client_id', clientId)
+      .eq('title', 'Análise — Oportunidade TettoHub')
+      .maybeSingle()
+      .then(({ data }) => {
+        if (!cancelled) {
+          setAnalysis(data?.content ?? null)
+          setLoadingAnalysis(false)
+        }
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [clientId])
+
+  if (!client) return null
+
+  return (
+    <div className="space-y-4">
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+        <DigitalStatusBadge
+          label={client.instagram_handle ? `Instagram (${client.instagram_handle})` : 'Instagram'}
+          known={client.has_instagram}
+          active={client.instagram_active}
+        />
+        <DigitalStatusBadge label="Site" known={client.has_website} />
+        <DigitalStatusBadge label="Anúncios pagos" known={client.runs_ads} />
+      </div>
+
+      {client.website_url && (
+        <p className="text-sm text-slate-400">
+          Site:{' '}
+          <a
+            href={client.website_url}
+            target="_blank"
+            rel="noreferrer"
+            className="text-emerald-400 hover:underline"
+          >
+            {client.website_url}
+          </a>
+        </p>
+      )}
+
+      <section className="rounded-xl border border-slate-800 bg-slate-900/40 p-4 sm:p-5">
+        <h3 className="mb-3 font-semibold text-slate-300">Resumo e oportunidade TettoHub</h3>
+        {loadingAnalysis ? (
+          <p className="text-sm text-slate-500">Carregando...</p>
+        ) : analysis ? (
+          <p className="whitespace-pre-line text-sm text-slate-300">{analysis}</p>
+        ) : (
+          <p className="text-sm text-slate-500">
+            Ainda não tem análise registrada pra esse cliente/prospect.
+          </p>
+        )}
+      </section>
+
+      {client.digital_checked_at && (
+        <p className="text-xs text-slate-600">
+          Última verificação de presença digital:{' '}
+          {new Date(client.digital_checked_at).toLocaleDateString('pt-BR')}
+        </p>
       )}
     </div>
   )

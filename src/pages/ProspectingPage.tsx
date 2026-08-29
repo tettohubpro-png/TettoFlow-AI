@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react'
 import type { DragEvent, FormEvent } from 'react'
+import { Link } from 'react-router-dom'
 import { useAuth } from '@/contexts/AuthContext'
 import { useProspects } from '@/hooks/useProspects'
 import type { Client, ClientLostReason, ClientPipelineStage } from '@/types/database'
@@ -232,7 +233,13 @@ function ProspectCard({
         isDragging ? 'opacity-40 ring-2 ring-emerald-500/40' : ''
       }`}
     >
-      <p className="font-medium break-words">{prospect.name}</p>
+      <Link
+        to={`/crm/${prospect.id}`}
+        onMouseDown={(e) => e.stopPropagation()}
+        className="font-medium break-words hover:text-emerald-300 hover:underline"
+      >
+        {prospect.name}
+      </Link>
       {prospect.segment && <p className="mt-1 text-xs text-slate-500">{prospect.segment}</p>}
       {prospect.city && <p className="text-xs text-slate-600">{prospect.city}</p>}
       {prospect.next_follow_up_date && (

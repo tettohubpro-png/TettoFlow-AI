@@ -97,6 +97,13 @@ export interface Client {
   origin: string | null
   notes: string | null
   social_links: ClientSocialLinks
+  has_instagram: boolean | null
+  instagram_handle: string | null
+  instagram_active: boolean | null
+  has_website: boolean | null
+  website_url: string | null
+  runs_ads: boolean | null
+  digital_checked_at: string | null
   created_at: string
   updated_at: string
   archived_at: string | null

@@ -21,6 +21,9 @@ export function useClients() {
       .from('clients')
       .select('*')
       .eq('workspace_id', workspace.id)
+      // Prospects (funil de Prospecção) ficam fora da lista principal de
+      // clientes até converterem — só aparecem aqui depois de virar 'WON'.
+      .eq('pipeline_stage', 'WON')
       .is('archived_at', null)
       .order('name')
 

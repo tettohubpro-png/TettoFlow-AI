@@ -5,6 +5,44 @@
 > deploys verificados, testes reais). Antes disso, ver "Linha de base histórica" ao final —
 > reconstruída a partir do `git log`, sem acesso a decisões não documentadas em commit.
 
+## 2026-08-29T16:00:00+00:00 — Briefing completo dos 22 clientes (pesquisa na internet) + limpeza de parcelas do Financeiro
+
+- **Contexto:** continuação da reconstrução do cadastro (mesma sessão). Dono pediu pra
+  preencher a aba "Briefing" de cada cliente (História, Objetivos, Persona, Restrições —
+  campos de `client_ai_memory` com títulos `Briefing — *`, mais `client_products`)
+  pesquisando na internet, já que a maioria das empresas fica em São Luís.
+- **Correção rápida antes**: "retire as parcelas do financeiro" — esclarecido que era só
+  pra tirar o rótulo "(parcela X/12)" da descrição dos 168 lançamentos já gerados, não
+  apagar os lançamentos. `regexp_replace` em massa, sem perda de dado.
+- **Pesquisa via `WebSearch`, empresa por empresa**: achei presença online real e
+  verificável pra 8 dos 22 (Am Consultoria — nome batia mas CNPJ diferente do contrato,
+  **não usei** pra não misturar empresa errada; Br Consultoria — BR Soluções Contábeis,
+  endereço real; Sacaria Maranhense — endereço, 14+ anos, lanchonete interna; Q Ball —
+  endereço em Vinhais, telefone; Clínica Dos Óculos — endereço no Centro; Ubrlancia — app
+  de despacho de ambulância, presente na Startup Summit 2025; Dr Home Br — site oficial
+  drhomebr.com.br, serviços completos; Petit Four — iFood, Instagram, endereço, horário).
+  Pra 3ERC achei uma empresa de mesmo nome em Bacabal, mas registrada como atividade
+  odontológica (não construtora) — **descartei** por não bater com o que o dono
+  confirmou, não usei informação de empresa possivelmente errada.
+- **Sem presença online encontrada** (12 de 22): usei só o contexto já confirmado pelo
+  dono na conversa, sem inventar fato extra. Pra ShotFire e Dra. Karol Facundo, nem o
+  ramo de atividade foi confirmado ainda — deixei marcado "a confirmar" em vez de
+  adivinhar.
+- **Achado de compliance reforçado**: no briefing do Vagner Miranda, documentei
+  explicitamente no campo "Restrições" que o handoff eleitoral (TSE) não dispara
+  automaticamente pra ele (LES-0023) — qualquer conteúdo de campanha precisa revisão
+  manual, registrado como aviso visível no próprio briefing, não só na memória técnica.
+- **Erro cometido e corrigido**: uma migration duplicou por engano os campos
+  "História"/"Persona" da Br Consultoria (rodou 2x, sem constraint única em
+  `client_ai_memory(client_id, title)` pra pegar isso) — descoberto ao validar contagem
+  de campos por cliente, apagado o duplicado. Um typo de UUID (`425d` em vez de `456d`)
+  na migration do Dr Home Br travou a transação inteira — refeita com o ID correto.
+- **Validação final**: `select ... count(*) filter (where title like 'Briefing — %')
+  group by cliente having count <> 4` — zero linhas fora do padrão, os 22 clientes
+  com exatamente os 4 campos de briefing esperados.
+- **Referência Git:** nenhum commit de código — trabalho de dado via MCP
+  (`apply_migration`).
+
 ## 2026-08-29T14:00:00+00:00 — Reconstrução completa do cadastro de clientes: 21 contratos + 1 parceiro, valores, serviços e permutas
 
 - **Contexto:** dono pediu auditoria do CRM ("preciso verificar o que já tem ativo") e

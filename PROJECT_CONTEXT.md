@@ -3,7 +3,7 @@
 ## Metadados
 - Projeto: TettoFlow AI OS (produto interno da agência TettoHub)
 - Repositório: `tettohubpro-png/TettoFlow-AI` (GitHub, remote `origin`)
-- Última atualização: 2026-08-29T14:00:00+00:00
+- Última atualização: 2026-08-29T16:00:00+00:00
 - Branch de referência: `claude/vps-access-connection-z05wyj` — ver Pendência #0 sobre
   divergência com `main`
 - Status geral: em produção, uso ativo diário pela agência (não é protótipo)
@@ -269,6 +269,15 @@ full-text (accent-insensitive), automação parcial de nota de pesar.
     vence) — cliente com mais de um perfil (ex: Vagner Miranda, advogado E
     pré-candidato) só aciona handoff de um dos dois. Achado em 2026-08-29, não
     corrigido. Ver `PROJECT_LESSONS.md`.
+11. **`client_ai_memory` não tem constraint única em `(client_id, title)`** — permite
+    duplicar campos de briefing (`Briefing — História`, etc.) sem erro se a mesma
+    inserção rodar 2x. Já aconteceu uma vez (Br Consultoria, 2026-08-29, corrigido na
+    hora). Considerar `UNIQUE(client_id, title)` ou um `upsert` de verdade no lugar de
+    `insert` simples nesses fluxos.
+12. **Todos os 22 clientes ativos têm briefing (história/objetivos/persona/restrições)
+    preenchido**, pesquisado na internet em 2026-08-29 — mas ShotFire e Dra. Karol
+    Facundo ainda estão com "a confirmar" no ramo de atividade, precisam de resposta
+    do dono.
 
 ## Decisões vigentes
 - Delay de 90s antes de responder cliente automaticamente (histórico de idas e voltas:

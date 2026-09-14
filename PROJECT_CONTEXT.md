@@ -168,9 +168,20 @@ equipe.
   pra Netlify de propósito** — o dono decidiu não publicar esse domínio ainda (quer
   terminar o redesign `tettohub-site-oficial` antes, ver diretório local homônimo), então
   o piloto foi validado só via `Host` header/IP, sem tocar DNS nem emitir certificado SSL
-  novo. Passos 5-7 ainda não iniciados. `netlify.toml` do `Agencia-TettoHub` ainda não
-  removido (aguardando decisão consolidada — repo já não depende dele pra deploy, mas
-  arquivo permanece até confirmação final).
+  novo. **Passo 5 (App-PetitFour) também validado** — migrado pra
+  `/srv/projetos/app-petitfour`, deploy via `docker compose up --build` por SSH
+  confirmado funcionando (postgres/redis nem reiniciaram, zero downtime pros dados;
+  frontend/backend recriados com alguns segundos de blip, autorizado pelo dono). Deploy
+  key só-leitura dedicada cadastrada nesse repositório pra `git pull` funcionar sem
+  depender de login pessoal. **Achado à parte**: o CI (`ci.yml`) desse projeto já estava
+  quebrado antes desta sessão (`cache-dependency-path` aponta pra lockfiles que não
+  existem nessa estrutura de monorepo) — meu workflow de deploy é gated por esse CI, então
+  só funciona via `workflow_dispatch` manual até alguém corrigir (não fiz, fora do escopo
+  da reorg de infra). Passos 6-7 ainda não iniciados. `netlify.toml` do `Agencia-TettoHub`
+  ainda não removido (aguardando decisão consolidada — repo já não depende dele pra
+  deploy, mas arquivo permanece até confirmação final). Diretório antigo
+  `/home/developer/projects/cliente-novo-app` também não removido ainda (sem containers
+  rodando dali, só clone obsoleto).
 
 ## Estrutura relevante do repositório
 ```

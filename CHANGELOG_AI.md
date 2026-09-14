@@ -5,6 +5,36 @@
 > deploys verificados, testes reais). Antes disso, ver "Linha de base histórica" ao final —
 > reconstruída a partir do `git log`, sem acesso a decisões não documentadas em commit.
 
+## 2026-09-14T17:10:00-03:00 — Reorganização de infra da VPS, passo 5: App-PetitFour migrado e validado (Docker)
+
+- **O que foi feito:** projeto clonado (via deploy key só-leitura própria, cadastrada no
+  repo) pra `/srv/projetos/app-petitfour`; arquivos não versionados (`.env`,
+  `backend/.env`, `backend/.env.test`, `frontend/.env.local`, `backend/uploads/` — 22
+  arquivos reais, fotos de produto/logo da empresa) copiados do local antigo
+  (`/home/developer/projects/cliente-novo-app`). Criado `.github/workflows/deploy.yml`
+  (SSH + `git pull` + `docker compose up -d --build`), gated por `workflow_run` no CI
+  (só faz deploy se os testes passarem) com `workflow_dispatch` como escape manual.
+- **Achado à parte (não corrigido, fora do escopo):** o CI (`ci.yml`) do App-PetitFour já
+  estava quebrado antes desta sessão — `cache-dependency-path` do `actions/setup-node@v4`
+  aponta pra `backend/package-lock.json`/`frontend/package-lock.json`, que não existem
+  nessa estrutura (lockfile único na raiz, monorepo). Confirmado que falha desde pelo
+  menos 2026-08-29 (commits anteriores também com CI `failure`). Como o deploy é gated
+  por esse CI, nenhum deploy automático vai rodar enquanto isso não for corrigido — só o
+  `workflow_dispatch` manual funciona por enquanto.
+- **Validação (via `workflow_dispatch`, já que o CI gate está quebrado):** rodou com
+  sucesso em ~9min (build sem cache do zero). Confirmado depois: containers
+  `frontend`/`backend` recriados (poucos segundos de blip, autorizado pelo dono na hora),
+  `postgres`/`redis` **nem foram tocados** (mesmo projeto Docker Compose, imagens não
+  mudaram — `Up 2 weeks` contínuo, zero downtime pros serviços com estado). Confirmado via
+  label `com.docker.compose.project.working_dir` que os containers rodam a partir do novo
+  caminho. `frontend:3000` responde 200, `backend:3333` responde 404 (esperado, API sem
+  rota em `/`).
+- **Pendente:** corrigir o CI quebrado (decisão do dono, fora do escopo desta reorg);
+  configurar nginx (host) + SSL pra esse app quando o domínio `petitfour.com.br` for
+  registrado (`docs/DECISIONS.md` do próprio projeto já marca isso como pendência);
+  remover `/home/developer/projects/cliente-novo-app` (clone antigo, sem containers rodando
+  mais dali, só ocupando espaço).
+
 ## 2026-09-14T16:50:00-03:00 — Início da reorganização de infra da VPS (sai da Netlify, deploy automatizado): passos 1-2 feitos, piloto (passo 4) validado ponta a ponta
 
 - **Contexto:** dono trouxe um plano próprio de 7 passos pra reorganizar a VPS —

@@ -28,6 +28,8 @@
 | LES-0022 | Kanban de Tarefas (`ProjectsPage`) — drag-and-drop | Erro | Trigger `enforce_operation_status_step` só permite mover status 1 etapa por vez; o Kanban deixa soltar em qualquer coluna e descarta o erro em silêncio | Resolvida | 2026-08-29 |
 | LES-0023 | `agent-whatsapp` — `inferSegment()` compliance | Erro | Segmento de compliance (jurídico/saúde/eleitoral) é mutuamente exclusivo por `if` sequencial — cliente com mais de um perfil só aciona handoff de um dos dois | Vigente | 2026-08-29 |
 | LES-0024 | CRM — cadastro em massa de clientes/contratos | Aprendizado | `service_description` do contrato vaza pro texto de cada parcela financeira (trigger de geração); `files.client_id` não tem `ON DELETE CASCADE`, bloqueia exclusão de cliente com arquivo anexado; sempre cruzar nome/telefone contra cadastro existente antes de criar cliente novo | Vigente | 2026-08-29 |
+| LES-0025 | `agent-whatsapp` — deploy via MCP falha por teto de tokens de saída | Incidente | Arquivo de ~152KB não cabe inteiro no parâmetro `content` de uma chamada `deploy_edge_function`, gerado numa única resposta — produção segue quebrada (v53) até deploy via Supabase CLI local | Vigente | 2026-08-29 |
+| LES-0026 | VPS — Postgres/Redis do projeto "petitfour" expostos pra internet via bypass Docker+ufw | Incidente de segurança | Docker publica porta de container via DNAT na chain FORWARD, que roda ANTES das regras do ufw — `ufw status` mostrando só 22/80/443/3000/3333 liberados não refletia o acesso real; bloqueado via `DOCKER-USER` (systemd persistente) | Resolvida | 2026-09-14 |
 
 ## Regras preventivas consolidadas
 
@@ -1070,6 +1072,81 @@
   correção de LES-0001/v53; `list_edge_functions` confirmando `agent-whatsapp` ainda em
   v53 após as duas tentativas.
 - **Confiança:** Alta.
+
+### LES-0026 — VPS: Postgres/Redis do projeto "petitfour" acessíveis pela internet inteira, apesar do `ufw` mostrar firewall restrito — Docker bypassa `ufw` via chain `FORWARD`
+- **Status:** Resolvida
+- **Tipo:** Incidente de segurança
+- **Severidade:** Crítica
+- **Área/módulo:** infraestrutura da VPS (`srv1885087`, IP `179.198.113.246`) — não é
+  código deste repositório, mas roda no mesmo servidor que hospeda o CRM/Evolution API.
+  Achado durante uma auditoria geral pedida pelo dono ("iremos estudar minha vps").
+- **Sintoma:** `docker ps` revelou um projeto Docker Compose não documentado, chamado
+  "petitfour" (frontend + backend + Postgres 16 + Redis 7 — aparentemente um sistema à
+  parte pro cliente Petit Four, não relacionado ao código deste repo), publicando as
+  portas 3000/3333/5432/6379 no host (`0.0.0.0:PORTA->container`). `ufw status` mostrava
+  só 22/80/443/3000/3333 como liberados — sugerindo que 5432 (Postgres) e 6379 (Redis)
+  estariam bloqueados por padrão (`deny incoming`). Na prática, NÃO estavam: confirmado
+  lendo as regras reais do `iptables` (`iptables -t nat -L DOCKER` + `iptables -L DOCKER
+  -n`), que mostravam regras `DNAT`+`ACCEPT` explícitas redirecionando qualquer origem
+  (`0.0.0.0/0`) da porta pública 5432/6379 pro IP interno do container correspondente.
+- **Causa raiz:** Docker publica portas de container via NAT (`DNAT` na chain
+  `PREROUTING`) + `ACCEPT` nas chains `DOCKER`/`DOCKER-FORWARD`, que rodam dentro da chain
+  `FORWARD` do kernel — **não** da chain `INPUT`, que é a única que o `ufw` filtra por
+  padrão. Como o `DNAT` reescreve o IP de destino ANTES da decisão de roteamento, o pacote
+  deixa de ser "pra esse host" (INPUT) e passa a ser "encaminhado" (FORWARD) pro container —
+  path que o `ufw status`/regras normais do `ufw` simplesmente não cobrem. Isso é uma
+  armadilha conhecida (não específica deste projeto) de qualquer VPS rodando Docker +
+  `ufw` juntos: publicar uma porta de container (`ports:` no compose) torna essa porta
+  acessível da internet **independente** do que o `ufw` mostra, a menos que se use o ponto
+  de customização oficial do Docker pra isso.
+- **Impacto:** Postgres e Redis de um sistema de produção de um cliente real ficaram
+  acessíveis por qualquer IP da internet por tempo indeterminado (containers up há 2
+  semanas na hora do achado) — sem confirmação de credenciais fracas/fortes (não
+  testado, por escolha deliberada: inspecionar `iptables` é auditoria de rede, tentar
+  logar no banco seria testar exploração, fora do escopo pedido).
+- **Solução aplicada (2026-09-14):** duas camadas.
+  1. Regras `iptables -I DOCKER-USER -i eth0 -p tcp -d 172.20.0.0/16 --dport {5432,6379}
+     -j DROP` — `DOCKER-USER` é a chain que o próprio Docker garante nunca sobrescrever,
+     avaliada ANTES de `DOCKER-FORWARD`; `-d 172.20.0.0/16` (sub-rede do
+     `petitfour_default`, via `docker network inspect`) em vez do IP exato de cada
+     container, pra sobreviver a uma recriação dos containers com IP interno diferente.
+     Aplicadas na hora, sem downtime nem reiniciar containers — confirmado que o acesso
+     via `localhost:5432` (necessário pro próprio container/app) continua funcionando,
+     porque esse caminho é `INPUT`/loopback, não passa por `DOCKER-USER`.
+  2. Persistência: script idempotente em `/usr/local/sbin/docker-user-firewall.sh` +
+     serviço systemd `docker-user-firewall.service` (`After=docker.service`,
+     `WantedBy=multi-user.target`) reaplicando as mesmas regras a cada boot. **Não** foi
+     usado `/etc/ufw/after.rules` (caminho "oficial" mais comum pra esse tipo de fix)
+     porque a chain `DOCKER-USER` só existe depois que o `docker.service` sobe, e a ordem
+     de boot entre `ufw.service` e `docker.service` não é garantida — um `-A DOCKER-USER
+     ...` no `after.rules` rodando antes do Docker existir quebraria o `ufw reload`
+     inteiro. Um serviço systemd com `After=docker.service` explícito evita essa corrida.
+- **Validação da solução:** regra confirmada na chain (`iptables -L DOCKER-USER -n -v`);
+  containers `petitfour-*` seguem `Up`/`healthy` depois da mudança; `localhost:5432`
+  segue alcançável do próprio host; serviço systemd habilitado e testado
+  (`systemctl enable --now`, status `active (exited)`, idempotente — reexecução não
+  duplica regra, checado via `iptables -C` antes de inserir).
+- **Ainda pendente (fora do escopo desta correção):** (a) `PROJECT_CONTEXT.md` não
+  documentava o projeto "petitfour" nenhuma vez — auditar o que é esse sistema, quem
+  mantém, e se pertence à TettoHub ou é um serviço white-label pro cliente; (b) não
+  confirmado se as credenciais do Postgres/Redis expostos são fracas (recomendação: trocar
+  a senha por precaução, já que ficaram expostas por tempo indeterminado, mesmo com o
+  bloqueio de rede agora em vigor); (c) mesma checagem (`iptables -t nat -L DOCKER`) vale a
+  pena repetir pra Evolution API e qualquer container Docker futuro que publique porta —
+  hoje só Evolution/Postgres/Redis do Evolution não têm porta de banco publicada
+  (verificado, ok), mas não há garantia de que isso se mantenha em containers futuros.
+- **Regra preventiva:** em qualquer VPS com Docker + `ufw`, `ufw status` **não** é fonte de
+  verdade sobre o que está de fato acessível da internet pra portas publicadas por
+  container (`ports:` no compose/`docker run -p`) — sempre conferir
+  `iptables -t nat -L DOCKER -n` e `iptables -L DOCKER -n` (ou `DOCKER-FORWARD`) também.
+  Container que não precisa ser acessado de fora (banco, cache, serviço interno) não
+  deveria nem publicar a porta no host (`ports:` no compose) — o ideal é resolver via rede
+  interna do Docker (nome do serviço), com `DOCKER-USER` como cinto de segurança adicional,
+  não como única camada.
+- **Referências:** auditoria geral da VPS pedida pelo dono ("iremos estudar minha vps"),
+  2026-09-14; `docker ps`, `iptables -t nat -L DOCKER`, `iptables -L DOCKER-FORWARD -n -v`,
+  `docker network inspect petitfour_default`.
+- **Confiança:** Alta (confirmado lendo as regras reais do `iptables`, não inferido).
 
 ## Registro rápido durante a tarefa
 

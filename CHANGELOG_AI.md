@@ -5,6 +5,36 @@
 > deploys verificados, testes reais). Antes disso, ver "Linha de base histórica" ao final —
 > reconstruída a partir do `git log`, sem acesso a decisões não documentadas em commit.
 
+## 2026-09-14T16:15:00-03:00 — Auditoria geral da VPS + correção de exposição crítica (Postgres/Redis do "petitfour" acessíveis pela internet)
+
+- **Contexto:** dono pediu auditoria geral da VPS ("iremos estudar minha vps"). Sessão
+  roda direto na VPS de produção (`srv1885087`, IP `179.198.113.246`).
+- **O que foi feito:** levantamento de recursos (disco/RAM/uptime/load), serviços
+  systemd, containers Docker, sites nginx, portas abertas, regras de firewall (`ufw`) e
+  pacotes desatualizados. Achado principal: projeto Docker Compose "petitfour"
+  (frontend/backend/Postgres/Redis) não documentado em lugar nenhum, publicando portas
+  3000/3333/5432/6379 no host. `ufw status` mostrava só 22/80/443/3000/3333 liberados,
+  mas confirmado via `iptables -t nat -L DOCKER`/`iptables -L DOCKER-FORWARD -n -v` que o
+  Postgres (5432) e o Redis (6379) desse projeto estavam de fato acessíveis de qualquer
+  IP da internet — Docker publica porta via `DNAT` na chain `FORWARD`, que roda ANTES das
+  regras do `ufw` (que só filtra `INPUT` por padrão). Ver `PROJECT_LESSONS.md` LES-0026
+  pro detalhamento técnico completo.
+- **Correção aplicada:** confirmada com o dono (opção "bloquear agora via iptables").
+  Regras `DROP` na chain `DOCKER-USER` (ponto oficial do Docker pra customização do host,
+  nunca sobrescrito por ele), restritas à sub-rede `172.20.0.0/16` do
+  `petitfour_default` + portas 5432/6379, entrando só pela interface pública `eth0` —
+  não afeta o acesso interno dos próprios containers nem `localhost`. Aplicadas na hora
+  (sem downtime, containers seguem `Up`/`healthy`) e persistidas via
+  `/usr/local/sbin/docker-user-firewall.sh` + `docker-user-firewall.service` (systemd,
+  `After=docker.service`, reaplica a cada boot, idempotente).
+- **Resultado:** ✅ Postgres/Redis do "petitfour" não são mais alcançáveis da internet.
+  Verificado: regra ativa na chain, `localhost:5432` continua respondendo (path interno
+  intacto), serviço systemd habilitado e testado.
+- **Pendente:** confirmar se as credenciais desse banco precisam ser trocadas (ficaram
+  expostas por tempo indeterminado — containers já estavam `Up` há 2 semanas quando o
+  achado ocorreu); documentar o que de fato é o projeto "petitfour" e quem o mantém
+  (fora do escopo desta sessão, que é o repo TettoFlow-AI).
+
 ## 2026-08-29T17:30:00-03:00 — Tentativa de correção do `agent-whatsapp` quebrado (v53): FALHOU — produção segue quebrada
 
 - **Contexto:** um deploy anterior (mesmo dia, turno principal) gerou o parâmetro

@@ -5,6 +5,38 @@
 > deploys verificados, testes reais). Antes disso, ver "Linha de base histórica" ao final —
 > reconstruída a partir do `git log`, sem acesso a decisões não documentadas em commit.
 
+## 2026-09-14T18:25:00-03:00 — Reestruturação tipográfica do site Agencia-TettoHub (Manrope + Inter)
+
+- **Contexto:** dono trouxe um protocolo próprio (`TETTOHUB-PROTOCOLO-TIPOGRAFIA.md`,
+  anexado na conversa) pedindo Manrope pra títulos/impacto e Inter pra leitura/interface
+  no site institucional, com processo obrigatório: auditoria → plano → aprovação →
+  implementação → validação em 6 breakpoints → relatório.
+- **Auditoria:** projeto (Vite + React 19 + Tailwind 4) já tinha tipografia 100%
+  centralizada em 2 arquivos (`index.html` pro import de fonte, `src/index.css` pros
+  tokens `--font-display`/`--font-body`/`--font-mono`) — confirmado varrendo os 16
+  componentes e 8 páginas `.tsx`, nenhum tinha `font-family` inline nem usava classes
+  nativas `font-sans`/`font-mono` do Tailwind. Fontes antigas: Bricolage Grotesque
+  (títulos) + IBM Plex Sans (corpo) + IBM Plex Mono (11 elementos "chip técnico":
+  eyebrows, tags, badges, número de estatística).
+- **Decisão apresentada e aprovada pelo dono:** o protocolo só define 2 fontes: aposentar
+  a IBM Plex Mono, recriando o efeito visual dos 11 elementos em Inter (uppercase +
+  letter-spacing + peso 600/700) — exceto o número de estatística e o valor de
+  investimento, que viram Manrope 800 (regra do protocolo pra "estatísticas e números").
+- **Implementação:** só 2 arquivos alterados (`tettohub-landing/index.html` +
+  `tettohub-landing/src/index.css`) — nenhum componente `.tsx` precisou de edição, o
+  efeito se propagou pelos tokens já centralizados. Trabalho feito num clone limpo
+  separado (branch `feature/typography-protocol`), sem tocar a cópia local
+  `/home/developer/projects/Agencia-TettoHub` que tem edições não commitadas de sessão
+  anterior (dono pediu pra não mexer nelas ainda).
+- **Validação:** build de produção limpo; 6 breakpoints do protocolo (320/375/390/768/
+  1024/1440) capturados via Playwright com scroll-trigger (pra disparar animações de
+  reveal antes da captura) — zero erro de console, zero overflow horizontal em todos;
+  inspeção visual da Home e da página de Planos.
+- **Deploy:** aprovado pelo dono após ver os prints, push direto pra `main` (fast-forward
+  limpo, sem divergência), workflow de deploy automático rodou em 44s. Confirmado ao vivo
+  em `agenciatettohub.com.br` via `curl --resolve` (forçando o IP, já que o resolvedor
+  local tinha cache do site antigo) — novo import de fonte confirmado no HTML servido.
+
 ## 2026-09-14T18:00:00-03:00 — Clínica dos Óculos migrado e publicado (2º site de cliente na VPS)
 
 - **Contexto:** dono pediu pra migrar mais um site que tinha localmente no computador

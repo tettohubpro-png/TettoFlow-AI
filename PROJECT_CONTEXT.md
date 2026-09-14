@@ -164,11 +164,15 @@ equipe.
   testada; Organização GitHub adiada a pedido do dono, secrets ficam por repositório por
   enquanto). Passo 4 (piloto: `Agencia-TettoHub`) validado ponta a ponta — GitHub Actions
   builda e faz rsync pro `/srv/projetos/agencia-tettohub/dist`, nginx atualizado pra servir
-  dali (hash conferido, bate exato). **DNS de `agenciatettohub.com.br` continua apontado
-  pra Netlify de propósito** — o dono decidiu não publicar esse domínio ainda (quer
-  terminar o redesign `tettohub-site-oficial` antes, ver diretório local homônimo), então
-  o piloto foi validado só via `Host` header/IP, sem tocar DNS nem emitir certificado SSL
-  novo. **Passo 5 (App-PetitFour) também validado** — migrado pra
+  dali (hash conferido, bate exato). **Atualização 2026-09-14 (tarde)**: o dono mudou de
+  ideia e pediu pra publicar mesmo assim — DNS de `agenciatettohub.com.br`/`www` trocado
+  no Registro.br (zona DNS lá, `b.sec.dns.br`/`c.sec.dns.br`, DNSSEC ativo) pra apontar
+  pra VPS (`179.198.113.246`), certificado SSL emitido via Certbot (`agenciatettohub.com.br`
+  + `www`, renovação automática já agendada, válido até 2026-12-13), nginx com redirect
+  HTTP→HTTPS confirmado funcionando. **Site institucional da TettoHub está oficialmente
+  fora da Netlify.** O projeto de redesign (`agencia-tettohub-redesign`, local
+  `/home/developer/projects/`, sem repo remoto ainda) segue como candidato futuro pra
+  substituir o conteúdo atual, sem pressa. **Passo 5 (App-PetitFour) também validado** — migrado pra
   `/srv/projetos/app-petitfour`, deploy via `docker compose up --build` por SSH
   confirmado funcionando (postgres/redis nem reiniciaram, zero downtime pros dados;
   frontend/backend recriados com alguns segundos de blip, autorizado pelo dono). Deploy

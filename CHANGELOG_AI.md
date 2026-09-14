@@ -5,6 +5,27 @@
 > deploys verificados, testes reais). Antes disso, ver "Linha de base histórica" ao final —
 > reconstruída a partir do `git log`, sem acesso a decisões não documentadas em commit.
 
+## 2026-09-14T17:50:00-03:00 — agenciatettohub.com.br tirado da Netlify de vez, publicado na VPS com SSL
+
+- **Contexto:** dono mudou de ideia (decisão anterior era esperar o redesign) e pediu pra
+  já tirar o domínio principal da Netlify agora. Trocou o registro DNS ele mesmo no painel
+  do Registro.br (modo avançado) — acompanhei em tempo real por screenshot e corrigi um
+  erro no caminho (ele criou `www` como `CNAME` apontando pra um IP, o que é inválido —
+  CNAME só aceita nome de domínio; orientei trocar pra `A`).
+- **O que foi feito depois do DNS salvo:** confirmei a propagação consultando direto o
+  servidor autoritativo (`dig @b.sec.dns.br`, contornando cache local desatualizado);
+  `certbot --nginx -d agenciatettohub.com.br -d www.agenciatettohub.com.br --redirect`
+  emitiu o certificado SSL e configurou o nginx sozinho (renovação automática agendada
+  pelo certbot). Validei com `curl --resolve` (forçando o IP certo, já que o resolvedor
+  local da VPS ainda tinha cache do valor antigo): HTTPS 200 nos dois, HTTP→HTTPS
+  redirecionando (301).
+- **Resultado:** ✅ `agenciatettohub.com.br` e `www` servidos 100% pela VPS, com SSL válido
+  até 2026-12-13. Netlify não é mais usado pra esse domínio. Cache de DNS de terceiros
+  (fora do nosso controle) ainda demora até ~1h pra atualizar em todo lugar — natural, TTL
+  antigo era 3600s.
+- **Pendente:** o conteúdo publicado é o do `Agencia-TettoHub` (mesmo do piloto do passo
+  4) — o redesign `agencia-tettohub-redesign` segue como candidato futuro, sem prazo.
+
 ## 2026-09-14T17:10:00-03:00 — Reorganização de infra da VPS, passo 5: App-PetitFour migrado e validado (Docker)
 
 - **O que foi feito:** projeto clonado (via deploy key só-leitura própria, cadastrada no

@@ -5,6 +5,25 @@
 > deploys verificados, testes reais). Antes disso, ver "Linha de base histórica" ao final —
 > reconstruída a partir do `git log`, sem acesso a decisões não documentadas em commit.
 
+## 2026-09-14T18:00:00-03:00 — Clínica dos Óculos migrado e publicado (2º site de cliente na VPS)
+
+- **Contexto:** dono pediu pra migrar mais um site que tinha localmente no computador
+  dele — na prática já existia como repositório GitHub (`Clinica-dos-culos`), nunca tinha
+  sido publicado com sucesso em lugar nenhum (workflow antigo tentava GitHub Pages, todos
+  os runs anteriores falhavam, sem domínio/CNAME configurado).
+- **O que foi feito:** mesmo padrão do `Agencia-TettoHub` — deploy key só-leitura própria
+  cadastrada no repo, clone em `/srv/projetos/clinica-dos-oculos`, workflow novo
+  substituindo o antigo (GitHub Pages → rsync direto pra VPS via SSH), secrets
+  registrados, deploy disparado com sucesso em 34s. Servidor nginx novo
+  (`clinicasdosoculos.com.br` + `www`) apontando pro `dist/` publicado. Domínio já estava
+  registrado no Registro.br (mesma DNS `e.sec.dns.br`/`f.sec.dns.br`) mas sem nenhum
+  registro A — dono adicionou os 2 registros A ele mesmo, confirmado direto no servidor
+  autoritativo antes de emitir certificado. SSL via certbot, redirect HTTP→HTTPS
+  confirmado (200/200/301).
+- **Resultado:** ✅ `clinicasdosoculos.com.br` no ar pela primeira vez na história do
+  projeto (nunca tinha sido publicado antes). Dono pode apagar a cópia local do
+  computador com segurança — tudo preservado no GitHub + rodando na VPS.
+
 ## 2026-09-14T17:50:00-03:00 — agenciatettohub.com.br tirado da Netlify de vez, publicado na VPS com SSL
 
 - **Contexto:** dono mudou de ideia (decisão anterior era esperar o redesign) e pediu pra

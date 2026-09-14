@@ -141,19 +141,36 @@ equipe.
 - **Outros projetos na mesma VPS** (contexto de infraestrutura compartilhada, fora do
   escopo deste repositório): a VPS também hospeda o site/painel **AM Consultoria**
   (`amconsultoriama.com.br`, repo `Am-Consultoria-tt`, serviço `admin-api.service`,
-  self-hosted igual ao TettoFlow-AI), e um projeto Docker Compose chamado **"petitfour"**
-  (frontend + backend + Postgres 16 + Redis 7, containers `petitfour-*`, portas
-  3000/3333/5432/6379) — achado em auditoria geral de 2026-09-14, aparentemente um sistema
-  à parte pro cliente Petit Four (não relacionado ao código deste repositório e não
-  documentado em nenhum lugar até essa data). Detalhes desses outros projetos não
-  pertencem a este `PROJECT_CONTEXT.md` — só citados aqui porque compartilham o mesmo
-  servidor. **Achado de segurança corrigido em 2026-09-14** (LES-0026): o Postgres/Redis
-  do "petitfour" estavam acessíveis pela internet inteira apesar do `ufw` mostrar firewall
-  restrito (Docker publica porta de container via a chain `FORWARD`, que roda antes das
-  regras do `ufw`) — bloqueado via regra `DOCKER-USER` + serviço systemd
+  self-hosted igual ao TettoFlow-AI), e o projeto **App-PetitFour** (cliente, doceria —
+  repo `App-PetitFour`, diretório local `cliente-novo-app`, Docker Compose com
+  frontend+backend+Postgres 16+Redis 7, containers `petitfour-*`, portas
+  3000/3333/5432/6379). Detalhes desses outros projetos não pertencem a este
+  `PROJECT_CONTEXT.md` — só citados aqui porque compartilham o mesmo servidor. **Achado de
+  segurança corrigido em 2026-09-14** (LES-0026): o Postgres/Redis do App-PetitFour
+  estavam acessíveis pela internet inteira apesar do `ufw` mostrar firewall restrito
+  (Docker publica porta de container via a chain `FORWARD`, que roda antes das regras do
+  `ufw`) — bloqueado via regra `DOCKER-USER` + serviço systemd
   `docker-user-firewall.service` (persiste no boot). Pendente: confirmar se as credenciais
   desse banco precisam ser trocadas (ficaram expostas por tempo indeterminado antes do
-  achado) — decisão de quem mantém o projeto "petitfour", fora do escopo desta sessão.
+  achado).
+- **Reorganização de infra da VPS — em andamento desde 2026-09-14** (pedido do dono: sair
+  da Netlify, centralizar tudo self-hosted, deploy automatizado por CI em vez de manual).
+  Plano definido pelo dono, 7 passos: (1) preparar VPS, (2) organizar GitHub + chave de
+  deploy, (3) 2 templates de workflow (site estático / app Docker), (4) migrar projeto
+  piloto, (5) migrar App-PetitFour, (6) replicar pros ~30 repositórios restantes (ver
+  `gh repo list tettohubpro-png`), (7) cancelar Netlify só depois de tudo confirmado.
+  Progresso: passos 1-2 feitos (usuário `deploy` dedicado — sem senha, grupo `docker`,
+  sudo restrito a nginx/certbot — pasta base `/srv/projetos`, chave SSH ed25519 própria,
+  testada; Organização GitHub adiada a pedido do dono, secrets ficam por repositório por
+  enquanto). Passo 4 (piloto: `Agencia-TettoHub`) validado ponta a ponta — GitHub Actions
+  builda e faz rsync pro `/srv/projetos/agencia-tettohub/dist`, nginx atualizado pra servir
+  dali (hash conferido, bate exato). **DNS de `agenciatettohub.com.br` continua apontado
+  pra Netlify de propósito** — o dono decidiu não publicar esse domínio ainda (quer
+  terminar o redesign `tettohub-site-oficial` antes, ver diretório local homônimo), então
+  o piloto foi validado só via `Host` header/IP, sem tocar DNS nem emitir certificado SSL
+  novo. Passos 5-7 ainda não iniciados. `netlify.toml` do `Agencia-TettoHub` ainda não
+  removido (aguardando decisão consolidada — repo já não depende dele pra deploy, mas
+  arquivo permanece até confirmação final).
 
 ## Estrutura relevante do repositório
 ```

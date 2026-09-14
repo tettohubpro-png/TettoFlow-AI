@@ -5,6 +5,42 @@
 > deploys verificados, testes reais). Antes disso, ver "Linha de base histórica" ao final —
 > reconstruída a partir do `git log`, sem acesso a decisões não documentadas em commit.
 
+## 2026-09-14T16:50:00-03:00 — Início da reorganização de infra da VPS (sai da Netlify, deploy automatizado): passos 1-2 feitos, piloto (passo 4) validado ponta a ponta
+
+- **Contexto:** dono trouxe um plano próprio de 7 passos pra reorganizar a VPS —
+  centralizar todos os projetos (site institucional, App-PetitFour, ~28 outros sites de
+  cliente hoje espalhados/na Netlify) em `/srv/projetos`, com deploy automatizado via
+  GitHub Actions em vez do fluxo manual antigo (build local → push GitHub → deploy
+  Netlify). Motivo explícito: parar de pagar Netlify.
+- **Passo 1 (preparar a VPS):** nginx/certbot/docker/node já estavam instalados (nada a
+  fazer). Criada `/srv/projetos` (base de todos os projetos). Criado usuário dedicado
+  `deploy` — sem senha (só chave SSH), grupo `docker`, sudo restrito via
+  `/etc/sudoers.d/deploy` a só `nginx -t`/`reload`/`restart` e `certbot` (nunca root
+  irrestrito nas Actions).
+- **Passo 2 (GitHub + chave):** dono decidiu adiar a criação da Organização GitHub
+  (marcada como opcional no próprio plano dele) — fica por repositório pessoal
+  (`tettohubpro-png`, 30 repos) por enquanto, revisitar depois que o padrão provar valor.
+  Gerada chave SSH ed25519 dedicada pro usuário `deploy`, testada localmente (login
+  funcionando), registrada como secret (`DEPLOY_SSH_KEY`) + `VPS_HOST`/`VPS_USER` no
+  repositório piloto via `gh secret set`.
+- **Passo 4 (piloto — `Agencia-TettoHub`):** criado workflow `.github/workflows/deploy.yml`
+  (build Vite no runner + rsync `dist/` pra `/srv/projetos/agencia-tettohub/dist` via
+  `deploy@VPS_HOST`). Branch com o workflow acabou sendo um superset limpo de `main`
+  (sem divergência) — fast-forward direto, sem PR. Push disparou o workflow
+  automaticamente: **sucesso em 44s**. Nginx atualizado pra servir do novo caminho
+  (`/srv/projetos/...` em vez do antigo `/var/www/agenciatettohub.com.br/dist`) — hash do
+  conteúdo servido confirmado idêntico ao publicado pelo CI.
+  **Deliberadamente não mexido:** DNS de `agenciatettohub.com.br` (ainda aponta pra
+  Netlify) e certificado SSL novo — dono já tinha decidido nesta mesma sessão não publicar
+  esse domínio ainda (prefere terminar o redesign `tettohub-site-oficial` primeiro), então
+  o piloto foi validado só via `Host` header/IP, sem ir ao ar de verdade.
+- **Pendente:** passo 5 (migrar App-PetitFour, com Docker — workflow ainda não criado),
+  passo 6 (replicar pros ~28 repositórios restantes), passo 7 (cancelar Netlify — só
+  depois de tudo confirmado), remover `netlify.toml`/`vercel.json` remanescentes (adiado
+  a pedido do dono pra depois de organizar a VPS primeiro), decidir entre
+  `Agencia-TettoHub` x `tettohub-site-oficial` como site institucional final, limpar
+  `/var/www/agenciatettohub.com.br` (path antigo, agora não usado).
+
 ## 2026-09-14T16:15:00-03:00 — Auditoria geral da VPS + correção de exposição crítica (Postgres/Redis do "petitfour" acessíveis pela internet)
 
 - **Contexto:** dono pediu auditoria geral da VPS ("iremos estudar minha vps"). Sessão

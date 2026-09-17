@@ -5,6 +5,19 @@
 > deploys verificados, testes reais). Antes disso, ver "Linha de base histórica" ao final —
 > reconstruída a partir do `git log`, sem acesso a decisões não documentadas em commit.
 
+## 2026-09-17T08:40:00-03:00 — BR Consultoria (brccontabilidade.com.br) migrado pra VPS (3º site de cliente)
+
+- **O que foi feito:** mesmo padrão dos dois anteriores (Agencia-TettoHub, Clínica dos
+  Óculos) — deploy key só-leitura própria cadastrada no repo `Br-Consultoria`, clone em
+  `/srv/projetos/br-consultoria`, workflow novo (`.github/workflows/deploy.yml`, repo não
+  tinha nenhum workflow antes), secrets registrados, deploy disparado com sucesso em 41s.
+  Servidor nginx novo (`brccontabilidade.com.br` + `www`).
+- **DNS:** estava na Netlify (`75.2.60.5` / CNAME `brconsultoria.netlify.app`). Dono
+  trocou os 2 registros A no Registro.br ele mesmo (mesma zona `e.sec.dns.br`/
+  `f.sec.dns.br`), confirmado no servidor autoritativo antes de emitir o certificado.
+- **Resultado:** ✅ SSL via certbot (válido até 2026-12-16), redirect HTTP→HTTPS
+  confirmado (200/200/301). Fora da Netlify.
+
 ## 2026-09-14T18:25:00-03:00 — Reestruturação tipográfica do site Agencia-TettoHub (Manrope + Inter)
 
 - **Contexto:** dono trouxe um protocolo próprio (`TETTOHUB-PROTOCOLO-TIPOGRAFIA.md`,

@@ -5,6 +5,56 @@
 > deploys verificados, testes reais). Antes disso, ver "Linha de base histórica" ao final —
 > reconstruída a partir do `git log`, sem acesso a decisões não documentadas em commit.
 
+## 2026-09-22T12:10:00-03:00 — Reorganização da hierarquia do CRM em 3 níveis (Operação/Gerência/Administrativa) + folha de pagamento
+
+- **Contexto:** dono pediu pra reorganizar o CRM em 3 etapas — Operação
+  (Funcionário, só as próprias demandas do dia), Gerência (Gerente, gerencia
+  entregas e decide a aprovação interna), Administrativa (Master, contas/
+  valores). Pediu explicitamente pra mostrar o plano antes de construir ou
+  dar push — plano apresentado e aprovado antes de qualquer código.
+- **Auditoria prévia (achado importante):** boa parte já estava protegida no
+  Postgres via RLS, não só no frontend — `operations_select`/`operations_update`
+  já restringem MEMBER a `responsible_id = auth.uid()`; `financial_entries`/
+  `client_contracts` já são `OWNER/ADMIN/MANAGER`-only; `clients`/
+  `client_ai_memory`/`client_brand` já liberam leitura pra MEMBER. Ou seja: o
+  trabalho foi quase todo de **tela** (o que mostro), não de segurança de dado
+  nova.
+- **Implementado:**
+  - `EmployeeDashboard` novo — dashboard do Funcionário mostra só Demandas de
+    hoje/Prontas no mês/Urgência/Correções, das próprias operações. Zero
+    financeiro/leads/receita (antes via `DashboardPage` único mostrando o
+    mesmo painel administrativo pra todo mundo).
+  - `canDecideApproval(role, type)` novo em `permissions.ts` — Gerente decide
+    aprovação `INTERNAL`; `CLIENT` continua exclusivo do Master.
+    `ApprovalsPage` atualizado pra checar por item, não globalmente.
+  - Funcionário ganha rota `/crm/:id` (só o detalhe — `/crm` sozinho, a lista
+    de clientes, continua bloqueado) via `canAccessPath`. Chega lá pelo link
+    "ver cliente" novo no `OperationCard`. Aba Contrato (financeiro) escondida
+    em `ClientBriefingPage` pra quem não tem `canViewFinance` — vale pra
+    qualquer papel, não só Funcionário.
+  - `ASSIGNABLE_ROLES` ganhou `ADMIN` — antes só dava pra atribuir
+    Gerente/Funcionário pela tela de Equipe, não tinha como promover
+    ninguém a Administrador.
+  - `TIER_LABELS` novo (Operação/Gerência/Administrativa), mostrado no rodapé
+    do menu lateral — só rótulo visual, não afeta nenhuma checagem real.
+  - **Folha de pagamento** (usando `company_bills`, mecanismo que já existia
+    pra outras contas da empresa — nenhuma tabela nova): Karol (Gerente) R$
+    2.000/mês, Eduarda e Marcela Costa (Funcionárias) R$ 1.250/mês cada, todo
+    dia 5 (convenção escolhida, editável pela tela de Financeiro a qualquer
+    momento). Lilian saiu da equipe entre a auditoria e a implementação (o
+    dono mexeu na Equipe em paralelo) — só as 3 pessoas atuais receberam
+    conta criada.
+- **Validação:** `tsc --noEmit` limpo, build de produção limpo, 27 testes
+  passando. Commit `e2f5c2f`, push pra `origin/claude/vps-access-connection-z05wyj`
+  (branch estava bem atrasada do GitHub — esse push também subiu todo o
+  trabalho acumulado de sessões anteriores que só existia local). CRM em
+  produção (`crm.agenciatettohub.com.br`) já serve o build novo — `dist/`
+  não é versionado, é rebuildado direto na VPS e o `tettoflow-crm.service`
+  lê do disco em tempo real, sem precisar reiniciar.
+- **Fora do escopo, avisado antes:** papel Cliente continua sem acesso
+  nenhum (inalterado); tabela `tasks` (separada, usada pelo Tettolino via
+  WhatsApp) não foi tocada, "Tarefas" continua sendo a página de `operations`.
+
 ## 2026-09-17T08:40:00-03:00 — BR Consultoria (brccontabilidade.com.br) migrado pra VPS (3º site de cliente)
 
 - **O que foi feito:** mesmo padrão dos dois anteriores (Agencia-TettoHub, Clínica dos

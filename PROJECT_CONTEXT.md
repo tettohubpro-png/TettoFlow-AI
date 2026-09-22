@@ -57,10 +57,16 @@ equipe.
 
 ## Usuários e casos de uso
 - **Mairo Gregory** — dono da agência (role `OWNER`), principal usuário/decisor.
-- **Equipe interna** — hoje 3 pessoas cadastradas no CRM além do dono: Karol (gestora),
-  Eduarda (social media), Lilian (design). Existem colaboradores de edição de vídeo
-  (André, Marcos) com grupo de WhatsApp dedicado mas **não cadastrados no CRM** — gap
-  conhecido, ver Pendências.
+- **Equipe interna** — hoje 3 pessoas cadastradas no CRM além do dono: Karol (Gerente,
+  gestora — R$ 2.000/mês), Eduarda (Funcionária, social media — R$ 1.250/mês), Marcela
+  Costa (Funcionária, social media — R$ 1.250/mês); folha de pagamento cadastrada em
+  `company_bills` (`kind='employee'`) em 2026-09-22. Lilian (design) saiu da equipe em
+  2026-09-22 (removida pelo dono direto na tela de Equipe). Existem colaboradores de
+  edição de vídeo (André, Marcos) com grupo de WhatsApp dedicado mas **não cadastrados no
+  CRM** — gap conhecido, ver Pendências. **Hierarquia formalizada em 2026-09-22** em 3
+  níveis — Operação (`MEMBER`) só vê as próprias demandas; Gerência (`MANAGER`) gerencia
+  entregas e decide aprovação interna; Administrativa (`OWNER`/`ADMIN`) tem acesso total,
+  inclusive financeiro. Ver `CHANGELOG_AI.md` da mesma data pro detalhamento técnico.
 - **Clientes da agência** — **22 clientes ACTIVE, reconciliados e validados pelo dono em
   2026-08-29** (lista fechada de 21 contratos + 1 parceiro adicional descoberto na
   reconciliação): Am Consultoria, Br Consultoria, Bom Corte, Sacaria Maranhense, Q Ball,

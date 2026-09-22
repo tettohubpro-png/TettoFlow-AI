@@ -16,6 +16,7 @@ import {
   canEditBriefing,
   canUploadRecordings,
   canViewAllClients,
+  canViewFinance,
 } from '@/utils/permissions'
 import { buildDriveFolderName } from '@/utils/driveFolder'
 import type { BriefingFormData, Client, ContractPeriodicity } from '@/types/database'
@@ -57,6 +58,10 @@ export function ClientBriefingPage() {
 
   const canEdit = canEditBriefing(role ?? undefined)
   const canUpload = canUploadRecordings(role ?? undefined)
+  // Contrato é dado financeiro — Funcionário nunca vê essa aba, nem o botão
+  // nem o conteúdo, mesmo que o estado `tab` de algum jeito fique 'contrato'
+  // (ver reorganização de hierarquia: Operação x Gerência x Administrativa).
+  const canSeeContract = canViewFinance(role ?? undefined)
 
   const folderPreview = useMemo(
     () => buildDriveFolderName(client?.name ?? 'Cliente', shootDate),
@@ -175,17 +180,19 @@ export function ClientBriefingPage() {
         >
           Gravações
         </button>
-        <button
-          type="button"
-          onClick={() => setTab('contrato')}
-          className={`min-h-11 flex-1 rounded-lg px-4 py-2.5 text-sm sm:flex-none ${
-            tab === 'contrato'
-              ? 'bg-emerald-500/20 font-medium text-emerald-300'
-              : 'bg-slate-900 text-slate-400'
-          }`}
-        >
-          Contrato
-        </button>
+        {canSeeContract && (
+          <button
+            type="button"
+            onClick={() => setTab('contrato')}
+            className={`min-h-11 flex-1 rounded-lg px-4 py-2.5 text-sm sm:flex-none ${
+              tab === 'contrato'
+                ? 'bg-emerald-500/20 font-medium text-emerald-300'
+                : 'bg-slate-900 text-slate-400'
+            }`}
+          >
+            Contrato
+          </button>
+        )}
         <button
           type="button"
           onClick={() => setTab('visualizacao')}
@@ -466,7 +473,7 @@ export function ClientBriefingPage() {
         </div>
       )}
 
-      {tab === 'contrato' && <ContractsTab clientId={clientId} canEdit={canEdit} />}
+      {tab === 'contrato' && canSeeContract && <ContractsTab clientId={clientId} canEdit={canEdit} />}
 
       {tab === 'visualizacao' && (
         <VisualizacaoTab

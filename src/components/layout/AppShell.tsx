@@ -29,7 +29,7 @@ import {
 } from 'lucide-react'
 import { useAuth } from '@/contexts/AuthContext'
 import { useTheme } from '@/contexts/ThemeContext'
-import { ROLE_LABELS, filterNavByRole, canAccessPath } from '@/utils/permissions'
+import { ROLE_LABELS, TIER_LABELS, filterNavByRole, canAccessPath } from '@/utils/permissions'
 import type { ThemeId } from '@/theme/tokens'
 
 interface NavItem {
@@ -338,7 +338,9 @@ function UserFooter({
         <div className="min-w-0 flex-1">
           <p className="truncate text-sm font-medium">{appUser?.name ?? '—'}</p>
           <p className="truncate text-xs" style={{ color: 'var(--color-text3)' }}>
-            {role ? ROLE_LABELS[role as keyof typeof ROLE_LABELS] : 'Sem permissão'}
+            {role
+              ? `${ROLE_LABELS[role as keyof typeof ROLE_LABELS]} · ${TIER_LABELS[role as keyof typeof TIER_LABELS]}`
+              : 'Sem permissão'}
           </p>
         </div>
       </div>

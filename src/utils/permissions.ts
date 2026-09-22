@@ -81,6 +81,21 @@ export const ROLE_LABELS: Record<MembershipRole, string> = {
   CLIENT: 'Cliente',
 }
 
+/**
+ * Os 3 níveis da estrutura do CRM — Operação (executa a demanda) →
+ * Gerência (organiza, entrega, aprova internamente) → Administrativa
+ * (contas, valores, decide o que vai pro cliente). Puramente visual/
+ * organizacional: não é checado em nenhum `can*()`, só rotula o papel real
+ * (`MembershipRole`) pra quem está logado saber em qual nível está.
+ */
+export const TIER_LABELS: Record<MembershipRole, string> = {
+  OWNER: 'Administrativa',
+  ADMIN: 'Administrativa',
+  MANAGER: 'Gerência',
+  MEMBER: 'Operação',
+  CLIENT: '—',
+}
+
 export const JOB_ROLE_LABELS: Record<JobRole, string> = {
   gerente: 'Gerente',
   gestor: 'Gestor',
@@ -108,7 +123,7 @@ export const BOOTSTRAP_ADMIN_EMAIL = 'admin@tettohub.com'
 export const BOOTSTRAP_ADMIN_LOGIN = 'admin'
 
 /** Papéis que o Master pode atribuir a funcionários */
-export const ASSIGNABLE_ROLES: MembershipRole[] = ['MANAGER', 'MEMBER']
+export const ASSIGNABLE_ROLES: MembershipRole[] = ['ADMIN', 'MANAGER', 'MEMBER']
 
 export function isMasterOwner(role: MembershipRole | undefined | null): boolean {
   return role === 'OWNER' || role === 'ADMIN'
@@ -176,6 +191,23 @@ export function canManageApprovals(role: MembershipRole | undefined): boolean {
   return isMaster(role)
 }
 
+/**
+ * Decide (aprovar/rejeitar/pedir alteração) uma aprovação específica.
+ * Master decide qualquer uma. Gerente decide só a etapa "Interna" — a
+ * aprovação do cliente (comunicação externa, compromisso com quem paga)
+ * continua exclusiva do Master. Ver reorganização de hierarquia:
+ * Operação (Funcionário) → Gerência (Gerente, decide o interno) →
+ * Administrativa (Master, decide tudo, inclusive o que vai pro cliente).
+ */
+export function canDecideApproval(
+  role: MembershipRole | undefined,
+  approvalType: 'INTERNAL' | 'CLIENT',
+): boolean {
+  if (isMaster(role)) return true
+  if (isManager(role)) return approvalType === 'INTERNAL'
+  return false
+}
+
 export function canEditBriefing(role: MembershipRole | undefined): boolean {
   return isMaster(role)
 }
@@ -236,6 +268,11 @@ export function canAccessPath(
 
   if (isEmployee(role)) {
     if (path === '/') return true
+    // Página de UM cliente (Briefing/Gravações — nunca Contrato, escondido
+    // à parte em ClientBriefingPage via canViewFinance) é liberada, mas só
+    // o detalhe: '/crm' sozinho (a lista/gestão de clientes) continua
+    // bloqueado — o Funcionário só chega lá clicando na própria demanda.
+    if (/^\/crm\/.+/.test(path)) return true
     if ([...EMPLOYEE_PATHS].some((p) => p !== '/' && (path === p || path.startsWith(`${p}/`)))) {
       return true
     }

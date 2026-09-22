@@ -9,7 +9,6 @@ import { CrmPage } from '@/pages/CrmPage'
 import { ProspectingPage } from '@/pages/ProspectingPage'
 import { ClientBriefingPage } from '@/pages/ClientBriefingPage'
 import { ProjectsPage } from '@/pages/ProjectsPage'
-import { AgendaPage } from '@/pages/AgendaPage'
 import { TeamPage } from '@/pages/TeamPage'
 import { DepartmentsPage } from '@/pages/DepartmentsPage'
 import { ApprovalsPage } from '@/pages/ApprovalsPage'
@@ -39,7 +38,9 @@ export default function App() {
             <Route path="crm/:clientId" element={<ClientBriefingPage />} />
             <Route path="comercial" element={<Navigate to="/crm" replace />} />
             <Route path="conteudo" element={<Navigate to="/tarefas" replace />} />
-            <Route path="agenda" element={<AgendaPage />} />
+            {/* Agenda virou a aba "Agenda" dentro de Tarefas (calendário de datas de
+                gravação/prazo) — não é mais uma página separada. */}
+            <Route path="agenda" element={<Navigate to="/tarefas" replace />} />
             <Route path="equipe" element={<TeamPage />} />
             <Route path="projetos" element={<Navigate to="/tarefas" replace />} />
             <Route path="departamentos" element={<DepartmentsPage />} />

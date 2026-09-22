@@ -255,7 +255,7 @@ export function ProjectsPage() {
             [
               { key: 'kanban', label: 'Kanban', icon: LayoutGrid },
               { key: 'tabela', label: 'Tabela', icon: Table2 },
-              { key: 'calendario', label: 'Calendário', icon: CalendarDays },
+              { key: 'calendario', label: 'Agenda', icon: CalendarDays },
             ] as const
           ).map(({ key, label, icon: Icon }) => (
             <button

@@ -5,7 +5,6 @@ import {
   Users,
   CheckSquare,
   Wallet,
-  Calendar,
   UsersRound,
   Building2,
   ClipboardCheck,
@@ -42,7 +41,6 @@ interface NavItem {
 const primaryNav: NavItem[] = [
   { to: '/', label: 'Início', icon: Home, end: true },
   { to: '/mensagens', label: 'WhatsApp', icon: MessageCircle },
-  { to: '/agenda', label: 'Agenda', icon: Calendar },
   { to: '/tarefas', label: 'Tarefas', icon: CheckSquare },
   { to: '/crm', label: 'Clientes', icon: Users },
   { to: '/prospeccao', label: 'Prospecção', icon: Target },

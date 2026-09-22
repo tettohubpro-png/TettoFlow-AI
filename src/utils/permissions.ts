@@ -104,7 +104,8 @@ export const JOB_ROLE_LABELS: Record<JobRole, string> = {
   videomaker: 'Videomaker',
   photographer: 'Fotógrafo',
   video_editor: 'Editor de Vídeo',
-  traffic: 'Tráfego Pago',
+  traffic: 'Gestor de Tráfego',
+  drone_pilot: 'Piloto de Drone',
 }
 
 export const JOB_ROLE_ORDER: JobRole[] = [
@@ -116,6 +117,7 @@ export const JOB_ROLE_ORDER: JobRole[] = [
   'photographer',
   'video_editor',
   'traffic',
+  'drone_pilot',
 ]
 
 /** Conta bootstrap do primeiro acesso (e-mail real no Auth) */

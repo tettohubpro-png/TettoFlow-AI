@@ -70,6 +70,7 @@ export type JobRole =
   | 'photographer'
   | 'video_editor'
   | 'traffic'
+  | 'drone_pilot'
 
 export interface ClientSocialLinks {
   instagram?: string

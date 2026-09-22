@@ -21,6 +21,9 @@ export function useClients() {
       .from('clients')
       .select('*')
       .eq('workspace_id', workspace.id)
+      // Prospects (funil de Prospecção) ficam fora da lista principal de
+      // clientes até converterem — só aparecem aqui depois de virar 'WON'.
+      .eq('pipeline_stage', 'WON')
       .is('archived_at', null)
       .order('name')
 
@@ -35,6 +38,39 @@ export function useClients() {
   useEffect(() => {
     fetchClients()
   }, [fetchClients])
+
+  // Realtime: qualquer INSERT/UPDATE/DELETE em clients desse workspace (feito
+  // pela própria UI, pelo Hermes via WhatsApp, ou por outra aba) atualiza a
+  // lista sem precisar recarregar a página.
+  useEffect(() => {
+    if (!workspace?.id) return
+
+    const channel = supabase
+      .channel(`clients-realtime-${workspace.id}`)
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'clients', filter: `workspace_id=eq.${workspace.id}` },
+        () => {
+          fetchClients()
+        },
+      )
+      .subscribe((status, err) => {
+        if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+          console.warn('[realtime:clients] falhou, refazendo fetch como fallback:', status, err)
+          fetchClients()
+        }
+      })
+
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') fetchClients()
+    }
+    document.addEventListener('visibilitychange', onVisible)
+
+    return () => {
+      document.removeEventListener('visibilitychange', onVisible)
+      supabase.removeChannel(channel)
+    }
+  }, [workspace?.id, fetchClients])
 
   const createClient = async (payload: {
     name: string

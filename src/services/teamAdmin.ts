@@ -32,6 +32,7 @@ export async function createTeamMember(input: {
   password: string
   role: Extract<MembershipRole, 'MANAGER' | 'MEMBER'>
   job_role?: JobRole | null
+  whatsapp_phone?: string | null
 }): Promise<{ error: string | null }> {
   try {
     const headers = await authHeader()
@@ -75,6 +76,30 @@ export async function updateTeamMemberRole(input: {
       method: 'POST',
       headers,
       body: JSON.stringify({ action: 'update_member_role', ...input }),
+    })
+    const body = await res.json().catch(() => ({}))
+    if (!res.ok) return { error: body.error ?? `HTTP ${res.status}` }
+    return { error: null }
+  } catch (err) {
+    return { error: String(err) }
+  }
+}
+
+/**
+ * Telefone de WhatsApp do funcionário — é o que o Hermes usa pra reconhecer
+ * que quem mandou mensagem pro número da agência é da equipe (e não um
+ * cliente/lead novo). Sem isso cadastrado, o agente não identifica a pessoa.
+ */
+export async function updateTeamMemberPhone(input: {
+  user_id: string
+  whatsapp_phone: string
+}): Promise<{ error: string | null }> {
+  try {
+    const headers = await authHeader()
+    const res = await fetch(FUNCTIONS_URL(), {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ action: 'update_member_phone', ...input }),
     })
     const body = await res.json().catch(() => ({}))
     if (!res.ok) return { error: body.error ?? `HTTP ${res.status}` }

@@ -2,7 +2,7 @@ import type { ClientAiMemory, ClientSegment } from '@/types/database'
 import { evaluateHandoff } from '@/utils/compliance'
 import {
   buildAiContext,
-  inferSegment,
+  inferSegments,
   type OperationSummary,
 } from '@/utils/aiContext'
 
@@ -10,7 +10,7 @@ export interface AiReplyResult {
   reply: string
   handoff: boolean
   handoffReason: string | null
-  segment: ClientSegment
+  segments: ClientSegment[]
   contextSnippets: string[]
 }
 
@@ -19,10 +19,10 @@ export function generateContextualReply(params: {
   message: string
   memories: ClientAiMemory[]
   operations: OperationSummary[]
-  segment?: ClientSegment
+  segments?: ClientSegment[]
 }): AiReplyResult {
-  const segment = params.segment ?? inferSegment(params.memories)
-  const handoffResult = evaluateHandoff(segment, params.message)
+  const segments = params.segments ?? inferSegments(params.memories)
+  const handoffResult = evaluateHandoff(segments, params.message)
 
   const { snippets } = buildAiContext(
     params.clientName,
@@ -37,7 +37,7 @@ export function generateContextualReply(params: {
         'Recebi sua mensagem. Um atendente da equipe TettoHub vai continuar o atendimento em breve.',
       handoff: true,
       handoffReason: handoffResult.reason,
-      segment,
+      segments,
       contextSnippets: snippets,
     }
   }
@@ -73,7 +73,7 @@ export function generateContextualReply(params: {
     reply,
     handoff: false,
     handoffReason: null,
-    segment,
+    segments,
     contextSnippets: snippets,
   }
 }

@@ -54,12 +54,16 @@ Deno.serve(async (req) => {
       const password = String(body.password ?? '').trim()
       const role = String(body.role ?? 'MEMBER').toUpperCase() as Role
       const jobRole = body.job_role ? String(body.job_role) : null
+      const whatsappDigits = String(body.whatsapp_phone ?? '').replace(/\D/g, '')
 
       if (!email || !password || password.length < 6) {
         return json({ error: 'Informe e-mail e senha (mín. 6 caracteres)' }, 400)
       }
       if (role !== 'MANAGER' && role !== 'MEMBER') {
         return json({ error: 'Papel inválido. Use Gerente ou Funcionário.' }, 400)
+      }
+      if (whatsappDigits && whatsappDigits.length < 10) {
+        return json({ error: 'WhatsApp inválido — informe com DDD (e DDI se puder).' }, 400)
       }
 
       const { data: created, error: createErr } = await admin.auth.admin.createUser({
@@ -77,6 +81,7 @@ Deno.serve(async (req) => {
         id: userId,
         name,
         email,
+        whatsapp_phone: whatsappDigits || null,
         must_change_password: true,
         access_status: 'active',
         auth_provider: 'email',
@@ -211,6 +216,35 @@ Deno.serve(async (req) => {
         .eq('user_id', userId)
         .neq('role', 'OWNER')
 
+      if (error) return json({ error: error.message }, 400)
+      return json({ ok: true })
+    }
+
+    if (action === 'update_member_phone') {
+      // Guarda em users.whatsapp_phone (só dígitos) — é isso que o Hermes usa
+      // pra reconhecer quem manda mensagem pelo número da agência é da
+      // equipe (resolveOperator), em vez de tratar como cliente/lead novo.
+      const userId = String(body.user_id ?? '')
+      if (!userId) return json({ error: 'user_id obrigatório' }, 400)
+
+      const raw = String(body.whatsapp_phone ?? '').trim()
+      const digits = raw.replace(/\D/g, '')
+      if (raw && digits.length < 10) {
+        return json({ error: 'WhatsApp inválido — informe com DDD (e DDI se puder).' }, 400)
+      }
+
+      const { data: target } = await admin
+        .from('memberships')
+        .select('id')
+        .eq('workspace_id', workspaceId)
+        .eq('user_id', userId)
+        .maybeSingle()
+      if (!target) return json({ error: 'Membro não encontrado' }, 404)
+
+      const { error } = await admin
+        .from('users')
+        .update({ whatsapp_phone: digits || null, updated_at: new Date().toISOString() })
+        .eq('id', userId)
       if (error) return json({ error: error.message }, 400)
       return json({ ok: true })
     }

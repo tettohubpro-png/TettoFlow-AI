@@ -17,6 +17,7 @@ import {
   createTeamMember,
   deleteTeamMember,
   inviteTeamMember,
+  updateTeamMemberPhone,
   updateTeamMemberRole,
 } from '@/services/teamAdmin'
 import { AccessControlModal } from '@/components/team/AccessControlModal'
@@ -35,7 +36,10 @@ export function TeamPage() {
     password: '',
     role: 'MEMBER' as Extract<MembershipRole, 'MANAGER' | 'MEMBER'>,
     job_role: '' as JobRole | '',
+    whatsapp_phone: '',
   })
+  const [phoneDrafts, setPhoneDrafts] = useState<Record<string, string>>({})
+  const [savingPhoneId, setSavingPhoneId] = useState<string | null>(null)
 
   const [showInvite, setShowInvite] = useState(false)
   const [inviting, setInviting] = useState(false)
@@ -99,6 +103,7 @@ export function TeamPage() {
       password: form.password,
       role: form.role,
       job_role: form.job_role || null,
+      whatsapp_phone: form.whatsapp_phone.trim() || null,
     })
     setCreating(false)
     if (result.error) {
@@ -106,8 +111,18 @@ export function TeamPage() {
       return
     }
     setShowForm(false)
-    setForm({ name: '', email: '', password: '', role: 'MEMBER', job_role: '' })
+    setForm({ name: '', email: '', password: '', role: 'MEMBER', job_role: '', whatsapp_phone: '' })
     await refresh()
+  }
+
+  const handleSavePhone = async (userId: string) => {
+    const value = (phoneDrafts[userId] ?? '').trim()
+    setSavingPhoneId(userId)
+    setError(null)
+    const result = await updateTeamMemberPhone({ user_id: userId, whatsapp_phone: value })
+    if (result.error) setError(result.error)
+    else await refresh()
+    setSavingPhoneId(null)
   }
 
   const handleDelete = async (userId: string, name: string) => {
@@ -333,6 +348,20 @@ export function TeamPage() {
               ))}
             </select>
           </label>
+          <label className="sm:col-span-2">
+            <span className="tf-label">WhatsApp (com DDD)</span>
+            <input
+              type="tel"
+              placeholder="98 99999-9999"
+              className="tf-input"
+              value={form.whatsapp_phone}
+              onChange={(e) => setForm({ ...form, whatsapp_phone: e.target.value })}
+            />
+            <span className="mt-1 block text-xs" style={{ color: 'var(--color-text3)' }}>
+              Precisa disso pro Tettolino reconhecer que a pessoa é da equipe quando mandar mensagem
+              pelo número da agência — sem isso, ela é tratada como cliente novo.
+            </span>
+          </label>
           <div className="sm:col-span-2">
             <button type="submit" disabled={creating} className="tf-btn tf-btn-primary">
               {creating ? 'Criando…' : 'Criar usuário'}
@@ -371,6 +400,37 @@ export function TeamPage() {
                     </p>
                   </div>
                 </div>
+
+                <label className="tf-label mt-4">WhatsApp (identificação pelo Tettolino)</label>
+                <div className="flex gap-2">
+                  <input
+                    type="tel"
+                    placeholder="98 99999-9999"
+                    className="tf-input"
+                    value={phoneDrafts[m.user_id] ?? m.user.whatsapp_phone ?? ''}
+                    onChange={(e) =>
+                      setPhoneDrafts((prev) => ({ ...prev, [m.user_id]: e.target.value }))
+                    }
+                  />
+                  <button
+                    type="button"
+                    disabled={
+                      savingPhoneId === m.user_id ||
+                      (phoneDrafts[m.user_id] ?? m.user.whatsapp_phone ?? '') ===
+                        (m.user.whatsapp_phone ?? '')
+                    }
+                    onClick={() => handleSavePhone(m.user_id)}
+                    className="tf-btn tf-btn-ghost shrink-0"
+                  >
+                    {savingPhoneId === m.user_id ? 'Salvando…' : 'Salvar'}
+                  </button>
+                </div>
+                {!m.user.whatsapp_phone && (
+                  <p className="mt-1 text-xs" style={{ color: 'var(--color-warning, #f59e0b)' }}>
+                    Sem WhatsApp cadastrado — o Tettolino vai tratar mensagens dessa pessoa como
+                    cliente novo, não como equipe.
+                  </p>
+                )}
 
                 {!isOwnerLike && (
                   <>

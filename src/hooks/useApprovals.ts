@@ -67,7 +67,7 @@ export function useApprovals() {
 
     await supabase
       .from('operations')
-      .update({ status: 'REVIEW' })
+      .update({ status: 'APPROVAL' })
       .eq('id', operationId)
 
     await fetchApprovals()
@@ -94,9 +94,9 @@ export function useApprovals() {
     if (apprErr) return { error: apprErr.message }
 
     let operationStatus: string | null = null
-    if (status === 'APPROVED') operationStatus = 'APPROVED'
+    if (status === 'APPROVED') operationStatus = 'REVISION'
     if (status === 'REJECTED' || status === 'CHANGES_REQUESTED') {
-      operationStatus = 'PRODUCTION'
+      operationStatus = 'IN_PROGRESS'
     }
 
     if (operationStatus) {

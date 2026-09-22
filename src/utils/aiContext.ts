@@ -64,10 +64,19 @@ export function buildAiContext(
   return { context: parts.join('\n'), snippets }
 }
 
-export function inferSegment(memories: ClientAiMemory[]): 'legal' | 'health_aesthetics' | 'electoral' | 'general' {
+/**
+ * Retorna TODOS os segmentos de compliance que o cliente pode acionar, não só
+ * o primeiro que bater — um cliente pode ser advogado E candidato ao mesmo
+ * tempo (ex: Vagner Miranda), e cada perfil tem sua própria regra de handoff.
+ * Ver PROJECT_LESSONS.md LES-0023.
+ */
+export function inferSegments(
+  memories: ClientAiMemory[],
+): ('legal' | 'health_aesthetics' | 'electoral' | 'general')[] {
   const text = memories.map((m) => `${m.title} ${m.content}`).join(' ').toLowerCase()
-  if (/oab|jur[ií]dic|advogad/.test(text)) return 'legal'
-  if (/anvisa|est[eé]tica|sa[uú]de|cl[ií]nica/.test(text)) return 'health_aesthetics'
-  if (/elei[çc][aã]o|tse|candidat/.test(text)) return 'electoral'
-  return 'general'
+  const segments: ('legal' | 'health_aesthetics' | 'electoral')[] = []
+  if (/oab|jur[ií]dic|advogad/.test(text)) segments.push('legal')
+  if (/anvisa|est[eé]tica|sa[uú]de|cl[ií]nica/.test(text)) segments.push('health_aesthetics')
+  if (/elei[çc][aã]o|tse|candidat/.test(text)) segments.push('electoral')
+  return segments.length > 0 ? segments : ['general']
 }

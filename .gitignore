@@ -1,5 +1,6 @@
 node_modules
 dist
+dist-preview
 .env
 .env.local
 .netlify
@@ -9,3 +10,5 @@ supabase/.temp
 supabase/.branches
 .vercel
 .env*
+.mcp.json
+deno.lock

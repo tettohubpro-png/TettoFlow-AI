@@ -13,3 +13,11 @@ export const supabase = createClient(
   supabaseUrl ?? 'https://placeholder.supabase.co',
   supabaseAnonKey ?? 'placeholder',
 )
+
+// Garante que o canal Realtime sempre use o token de acesso mais atual.
+// O client já faz isso internamente na maioria dos casos, mas em abas que
+// ficam muito tempo em segundo plano o timer de refresh pode atrasar — isso
+// reforça manualmente toda vez que a sessão muda (login, refresh, logout).
+supabase.auth.onAuthStateChange((_event, session) => {
+  supabase.realtime.setAuth(session?.access_token ?? null)
+})

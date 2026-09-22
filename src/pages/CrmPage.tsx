@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import type { FormEvent } from 'react'
 import { Link } from 'react-router-dom'
 import { useClients } from '@/hooks/useClients'
@@ -7,7 +7,9 @@ import { useAuth } from '@/contexts/AuthContext'
 import { supabase } from '@/lib/supabase'
 import { canManageClients, CLIENT_STATUS_LABELS } from '@/utils/permissions'
 import { ONBOARDING_MARKER_TITLE } from '@/types/database'
-import type { ClientStatus, ClientSocialLinks } from '@/types/database'
+import type { Client, ClientStatus, ClientSocialLinks } from '@/types/database'
+
+const FUNNEL_COLUMNS: ClientStatus[] = ['ACTIVE', 'INACTIVE', 'ARCHIVED']
 
 const inputClass =
   'min-h-11 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm'
@@ -18,6 +20,7 @@ export function CrmPage() {
   const { clients, loading, error, createClient, updateClient, fetchClients } = useClients()
   const { runs, running, lastResult, error: onboardingError, runOnboarding } = useOnboarding()
   const [showForm, setShowForm] = useState(false)
+  const [view, setView] = useState<'lista' | 'funil'>('lista')
   const [formTab, setFormTab] = useState<'basico' | 'redes' | 'contrato'>('basico')
   const [runAfterCreate, setRunAfterCreate] = useState(true)
   const [actionError, setActionError] = useState<string | null>(null)
@@ -180,6 +183,28 @@ export function CrmPage() {
         )}
       </header>
 
+      <div className="mb-4 flex gap-1 border-b border-slate-800">
+        {(
+          [
+            { key: 'lista', label: 'Lista' },
+            { key: 'funil', label: 'Funil' },
+          ] as const
+        ).map(({ key, label }) => (
+          <button
+            key={key}
+            type="button"
+            onClick={() => setView(key)}
+            className={`min-h-10 rounded-t-lg px-3 text-sm ${
+              view === key
+                ? 'bg-emerald-500/20 font-medium text-emerald-300'
+                : 'text-slate-400 hover:text-slate-200'
+            }`}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
       {(error || actionError || onboardingError) && (
         <p className="mb-4 rounded-lg bg-red-500/10 px-3 py-2 text-sm text-red-400">
           {error || actionError || onboardingError}
@@ -199,7 +224,7 @@ export function CrmPage() {
         </p>
       )}
 
-      {showForm && (
+      {view === 'lista' && showForm && (
         <form
           onSubmit={handleSubmit}
           className="mb-6 rounded-xl border border-slate-800 bg-slate-900/50 p-4 sm:p-5"
@@ -461,11 +486,11 @@ export function CrmPage() {
         </form>
       )}
 
-      {loading ? (
+      {view === 'lista' && loading ? (
         <p className="text-slate-500">Carregando clientes...</p>
-      ) : clients.length === 0 ? (
+      ) : view === 'lista' && clients.length === 0 ? (
         <p className="text-slate-500">Nenhum cliente cadastrado neste workspace.</p>
-      ) : (
+      ) : view === 'lista' ? (
         <>
           {/* Mobile cards */}
           <div className="space-y-3 md:hidden">
@@ -642,6 +667,8 @@ export function CrmPage() {
             </table>
           </div>
         </>
+      ) : (
+        <FunnelView clients={clients} loading={loading} />
       )}
 
       {runs.length > 0 && (
@@ -672,6 +699,61 @@ export function CrmPage() {
           </ul>
         </section>
       )}
+    </div>
+  )
+}
+
+function FunnelView({ clients, loading }: { clients: Client[]; loading: boolean }) {
+  const byStatus = useMemo(() => {
+    const map: Record<ClientStatus, Client[]> = { ACTIVE: [], INACTIVE: [], ARCHIVED: [] }
+    for (const c of clients) {
+      ;(map[c.status] ?? map.ACTIVE).push(c)
+    }
+    return map
+  }, [clients])
+
+  if (loading) {
+    return <p className="text-slate-500">Carregando clientes...</p>
+  }
+
+  return (
+    <div className="grid gap-3 md:grid-cols-3">
+      {FUNNEL_COLUMNS.map((status) => (
+        <section key={status} className="tf-panel flex min-h-[12rem] flex-col overflow-hidden">
+          <div
+            className="flex items-center justify-between px-3 py-2.5"
+            style={{ borderBottom: '1px solid var(--color-border)', background: 'var(--color-bg3)' }}
+          >
+            <h3 className="text-sm font-semibold">{CLIENT_STATUS_LABELS[status]}</h3>
+            <span className="tf-chip">{byStatus[status].length}</span>
+          </div>
+          <ul className="flex-1 space-y-2 p-3">
+            {byStatus[status].length === 0 && (
+              <li className="text-center text-xs" style={{ color: 'var(--color-text3)' }}>
+                Vazio
+              </li>
+            )}
+            {byStatus[status].map((c) => (
+              <li key={c.id}>
+                <Link
+                  to={`/crm/${c.id}`}
+                  className="block rounded-lg px-3 py-2 text-sm no-underline transition-colors"
+                  style={{
+                    background: 'var(--color-bg)',
+                    color: 'var(--color-text)',
+                    border: '1px solid var(--color-border)',
+                  }}
+                >
+                  <p className="font-medium">{c.name}</p>
+                  <p className="text-xs" style={{ color: 'var(--color-text3)' }}>
+                    {[c.segment, c.city].filter(Boolean).join(' · ') || 'Sem segmento'}
+                  </p>
+                </Link>
+              </li>
+            ))}
+          </ul>
+        </section>
+      ))}
     </div>
   )
 }

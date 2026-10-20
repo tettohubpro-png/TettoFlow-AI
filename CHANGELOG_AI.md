@@ -5,6 +5,25 @@
 > deploys verificados, testes reais). Antes disso, ver "Linha de base histórica" ao final —
 > reconstruída a partir do `git log`, sem acesso a decisões não documentadas em commit.
 
+## 2026-10-20 — Commit da correção de status de operação + compliance multi-segmento no `agent-whatsapp`
+
+- **Contexto:** a alteração em `supabase/functions/agent-whatsapp/index.ts` feita na
+  sessão de 2026-08-29 (LES-0021/LES-0022/LES-0023) estava no working tree sem commit.
+  Dono pediu o commit, push e deploy.
+- **Conteúdo do commit:** `OPERATION_STATUSES` passa a espelhar o enum real
+  `operation_status` (`NEW, IN_PROGRESS, APPROVAL, REVISION, DONE`); criação de
+  operação usa `'NEW'` (antes `'DRAFT'`, inválido no banco); contagem de operações
+  abertas filtra `status != 'DONE'`; `inferSegment()` → `inferSegments()` retorna todos
+  os segmentos de compliance e `needsHandoff()` confere cada um.
+- **Referência Git:** `3ffeccc` (push feito para `claude/vps-access-connection-z05wyj`).
+- **Deploy: NÃO realizado nem verificado.** O deploy foi bloqueado pelo controle de
+  permissões da sessão, e a leitura via MCP (`list_edge_functions`/`get_edge_function`)
+  retornou "You do not have permission to perform this action". Não se sabe se a versão
+  em produção é a deste commit. Para conferir: md5 do `index.ts` deployado
+  `89345815841a53312acf74a173311b13` = este commit; `42f80976a2330e69de7bde52bc38dab4`
+  = versão anterior (`deb4c8e`). LES-0023 continua aguardando essa confirmação para
+  virar `Resolvida`.
+
 ## 2026-09-22T12:10:00-03:00 — Reorganização da hierarquia do CRM em 3 níveis (Operação/Gerência/Administrativa) + folha de pagamento
 
 - **Contexto:** dono pediu pra reorganizar o CRM em 3 etapas — Operação

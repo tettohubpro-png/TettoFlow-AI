@@ -397,8 +397,8 @@ Deno.serve(async (req) => {
     const greeting = greetingIfNewDay(existingConv?.last_message_at as string | null | undefined)
 
     const route = routeIntent(payload.message)
-    const segment = inferSegment(memories ?? [])
-    const compliance = needsHandoff(segment, payload.message)
+    const segments = inferSegments(memories ?? [])
+    const compliance = needsHandoff(segments, payload.message)
 
     if (compliance.handoff) {
       const reply =
@@ -450,7 +450,7 @@ Deno.serve(async (req) => {
           client_id: client.id,
           template_id: DEFAULT_TEMPLATE_ID,
           title,
-          status: 'DRAFT',
+          status: 'NEW',
           priority: route.needsHuman ? 'HIGH' : 'MEDIUM',
         })
         .select('id')
@@ -1183,17 +1183,11 @@ const HERMES_IMMEDIATE_WRITE_TOOLS = new Set(['send_message'])
 const OWNER_RESTRICTED_USER_ID = '529a59e0-f2c6-45a3-bee9-9eaf7f6d1083'
 const OWNER_ONLY_TOOLS = new Set(['delete_client', 'send_message'])
 
-const OPERATION_STATUSES = [
-  'DRAFT',
-  'SUBMITTED',
-  'ANALYSIS',
-  'PRODUCTION',
-  'REVIEW',
-  'CLIENT',
-  'APPROVED',
-  'PUBLISHED',
-  'DONE',
-]
+// Espelha o enum operation_status real do Postgres (ver
+// PROJECT_LESSONS.md LES-0021/LES-0022) — esteve desatualizado com os 9
+// valores antigos até 2026-08-29, o que fazia create_operation/
+// update_operation_status do Tettolino falharem contra o banco de verdade.
+const OPERATION_STATUSES = ['NEW', 'IN_PROGRESS', 'APPROVAL', 'REVISION', 'DONE']
 const TASK_STATUSES = ['backlog', 'todo', 'in_progress', 'done']
 const PRIORITIES = ['LOW', 'MEDIUM', 'HIGH', 'CRITICAL']
 const CLIENT_STATUSES = ['ACTIVE', 'INACTIVE', 'ARCHIVED']
@@ -1902,7 +1896,7 @@ async function executeReadTool(
       .from('operations')
       .select('id', { count: 'exact', head: true })
       .eq('client_id', clientId)
-      .not('status', 'in', '(DONE,PUBLISHED)')
+      .neq('status', 'DONE')
 
     return {
       client,
@@ -2385,7 +2379,7 @@ async function executeWriteTool(
           template_id: DEFAULT_TEMPLATE_ID,
           title: String(input.title ?? ''),
           description: (input.description as string | undefined) ?? null,
-          status: 'DRAFT',
+          status: 'NEW',
           priority: (input.priority as string | undefined) ?? 'MEDIUM',
           deadline: (input.deadline as string | undefined) ?? null,
           created_by: actorId,
@@ -3163,22 +3157,27 @@ function routeIntent(message: string) {
   return { department: 'general' as Department, intent: 'general_inquiry', needsHuman: false }
 }
 
-function inferSegment(memories: { title: string; content: string }[]) {
+// Retorna TODOS os segmentos de compliance que o cliente pode acionar, não
+// só o primeiro que bater — um cliente pode ser advogado E candidato ao
+// mesmo tempo (ex: Vagner Miranda), e cada perfil tem sua própria regra de
+// handoff. Ver PROJECT_LESSONS.md LES-0023.
+function inferSegments(memories: { title: string; content: string }[]) {
   const text = memories.map((m) => `${m.title} ${m.content}`).join(' ').toLowerCase()
-  if (/oab|jurídic|advogad/.test(text)) return 'legal'
-  if (/anvisa|estética|saúde|clínica/.test(text)) return 'health_aesthetics'
-  if (/eleição|tse|candidat/.test(text)) return 'electoral'
-  return 'general'
+  const segments: string[] = []
+  if (/oab|jurídic|advogad/.test(text)) segments.push('legal')
+  if (/anvisa|estética|saúde|clínica/.test(text)) segments.push('health_aesthetics')
+  if (/eleição|tse|candidat/.test(text)) segments.push('electoral')
+  return segments.length > 0 ? segments : ['general']
 }
 
-function needsHandoff(segment: string, text: string) {
-  if (segment === 'legal' && LEGAL_PATTERNS.some((p) => p.test(text))) {
+function needsHandoff(segments: string[], text: string) {
+  if (segments.includes('legal') && LEGAL_PATTERNS.some((p) => p.test(text))) {
     return { handoff: true, reason: 'Aconselhamento jurídico específico — OAB' }
   }
-  if (segment === 'health_aesthetics' && HEALTH_PATTERNS.some((p) => p.test(text))) {
+  if (segments.includes('health_aesthetics') && HEALTH_PATTERNS.some((p) => p.test(text))) {
     return { handoff: true, reason: 'Promessa de resultado em saúde/estética — ANVISA' }
   }
-  if (segment === 'electoral' && ELECTORAL_PATTERNS.some((p) => p.test(text))) {
+  if (segments.includes('electoral') && ELECTORAL_PATTERNS.some((p) => p.test(text))) {
     return { handoff: true, reason: 'Conteúdo de propaganda eleitoral — TSE' }
   }
   return { handoff: false, reason: null }

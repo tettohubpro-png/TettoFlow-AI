@@ -11,14 +11,14 @@ export interface OnboardingOperationStep {
 
 /** Operações criadas automaticamente no onboarding */
 export const ONBOARDING_OPERATIONS: OnboardingOperationStep[] = [
-  { title: '[Onboarding] Briefing Inicial', status: 'DRAFT', priority: 'HIGH' },
-  { title: '[Onboarding] Checklist de Documentos', status: 'DRAFT', priority: 'HIGH' },
-  { title: '[Onboarding] Produção Mensal', status: 'DRAFT', priority: 'MEDIUM' },
-  { title: '[Onboarding] Calendário Editorial', status: 'DRAFT', priority: 'MEDIUM' },
-  { title: '[Onboarding] Social Media — Setup', status: 'DRAFT', priority: 'MEDIUM' },
-  { title: '[Onboarding] Design — Identidade Visual', status: 'DRAFT', priority: 'MEDIUM' },
-  { title: '[Onboarding] Videomaker — Planejamento', status: 'DRAFT', priority: 'LOW' },
-  { title: '[Onboarding] Editor — Roteiro Inicial', status: 'DRAFT', priority: 'LOW' },
+  { title: '[Onboarding] Briefing Inicial', status: 'NEW', priority: 'HIGH' },
+  { title: '[Onboarding] Checklist de Documentos', status: 'NEW', priority: 'HIGH' },
+  { title: '[Onboarding] Produção Mensal', status: 'NEW', priority: 'MEDIUM' },
+  { title: '[Onboarding] Calendário Editorial', status: 'NEW', priority: 'MEDIUM' },
+  { title: '[Onboarding] Social Media — Setup', status: 'NEW', priority: 'MEDIUM' },
+  { title: '[Onboarding] Design — Identidade Visual', status: 'NEW', priority: 'MEDIUM' },
+  { title: '[Onboarding] Videomaker — Planejamento', status: 'NEW', priority: 'LOW' },
+  { title: '[Onboarding] Editor — Roteiro Inicial', status: 'NEW', priority: 'LOW' },
 ]
 
 export function buildClientStoragePath(workspaceId: string, clientId: string): string {

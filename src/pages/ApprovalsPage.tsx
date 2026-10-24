@@ -5,7 +5,7 @@ import { useAuth } from '@/contexts/AuthContext'
 import {
   APPROVAL_STATUS_LABELS,
   APPROVAL_TYPE_LABELS,
-  canManageApprovals,
+  canDecideApproval,
 } from '@/utils/permissions'
 import type { ApprovalStatus } from '@/types/database'
 
@@ -15,8 +15,6 @@ export function ApprovalsPage() {
   const { files, loading: filesLoading } = useFiles()
   const [note, setNote] = useState<Record<string, string>>({})
   const [actionError, setActionError] = useState<string | null>(null)
-
-  const canDecide = canManageApprovals(role ?? undefined)
 
   const handleDecide = async (
     approvalId: string,
@@ -71,7 +69,7 @@ export function ApprovalsPage() {
                   </span>
                 </div>
 
-                {canDecide && (
+                {canDecideApproval(role ?? undefined, a.type) && (
                   <div className="mt-4 space-y-3">
                     <input
                       placeholder="Observação (opcional)"

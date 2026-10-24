@@ -60,6 +60,44 @@ export function useConversations() {
     fetchConversations()
   }, [fetchConversations])
 
+  // Realtime: nova mensagem (do cliente, do Hermes, ou de outra aba) atualiza
+  // a lista/preview sem precisar recarregar a página.
+  useEffect(() => {
+    if (!workspace?.id) return
+
+    const channel = supabase
+      .channel(`conversations-realtime-${workspace.id}`)
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'conversations', filter: `workspace_id=eq.${workspace.id}` },
+        () => fetchConversations(),
+      )
+      .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'conversation_messages', filter: `workspace_id=eq.${workspace.id}` },
+        () => fetchConversations(),
+      )
+      .subscribe((status, err) => {
+        if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+          console.warn('[realtime:conversations] falhou, refazendo fetch como fallback:', status, err)
+          fetchConversations()
+        }
+      })
+
+    // Rede-de-segurança: se a conexão WS cair silenciosamente (aba em segundo
+    // plano por muito tempo, sono do laptop, etc.), buscar de novo assim que
+    // a aba volta a ficar visível — sem precisar de F5.
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') fetchConversations()
+    }
+    document.addEventListener('visibilitychange', onVisible)
+
+    return () => {
+      document.removeEventListener('visibilitychange', onVisible)
+      supabase.removeChannel(channel)
+    }
+  }, [workspace?.id, fetchConversations])
+
   return { conversations, previews, loading, error, refresh: fetchConversations }
 }
 
@@ -93,6 +131,34 @@ export function useConversationMessages(conversationId: string | undefined) {
   useEffect(() => {
     fetchMessages()
   }, [fetchMessages])
+
+  useEffect(() => {
+    if (!conversationId) return
+
+    const channel = supabase
+      .channel(`conversation-messages-realtime-${conversationId}`)
+      .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'conversation_messages', filter: `conversation_id=eq.${conversationId}` },
+        () => fetchMessages(),
+      )
+      .subscribe((status, err) => {
+        if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+          console.warn('[realtime:messages] falhou, refazendo fetch como fallback:', status, err)
+          fetchMessages()
+        }
+      })
+
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') fetchMessages()
+    }
+    document.addEventListener('visibilitychange', onVisible)
+
+    return () => {
+      document.removeEventListener('visibilitychange', onVisible)
+      supabase.removeChannel(channel)
+    }
+  }, [conversationId, fetchMessages])
 
   return { messages, loading, error, refresh: fetchMessages }
 }

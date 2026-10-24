@@ -20,10 +20,9 @@ export function PostCalendar({
       operations.filter(
         (op) =>
           op.deadline &&
-          (op.status === 'APPROVED' ||
-            op.status === 'PUBLISHED' ||
-            op.status === 'REVIEW' ||
-            op.status === 'CLIENT'),
+          (op.status === 'APPROVAL' ||
+            op.status === 'REVISION' ||
+            op.status === 'DONE'),
       ),
     [operations],
   )
@@ -43,7 +42,7 @@ export function PostCalendar({
             className={`flex w-full truncate rounded px-1 text-left text-[10px] transition ${
               selectedId === op.id
                 ? 'ring-1 ring-emerald-400/60 bg-emerald-500/25 text-emerald-200'
-                : op.status === 'PUBLISHED'
+                : op.status === 'DONE'
                   ? 'bg-sky-500/15 text-sky-300 hover:bg-sky-500/25'
                   : 'bg-emerald-500/15 text-emerald-300 hover:bg-emerald-500/25'
             }`}

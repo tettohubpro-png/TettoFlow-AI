@@ -1,4 +1,5 @@
 import type { DragEvent } from 'react'
+import { Link } from 'react-router-dom'
 import type { Operation } from '@/types/database'
 import type { OperationExtendedMeta } from '@/utils/operationExtras'
 import { OPERATION_STATUS_LABELS } from '@/utils/permissions'
@@ -115,11 +116,20 @@ export function OperationCard({
 
       <button type="button" onClick={onEdit} className="w-full text-left">
         <p className="pr-2 font-medium break-words">{operation.title}</p>
-        <p className="mt-1 text-xs text-slate-500">{operation.clients?.name}</p>
         {responsibleName && (
           <p className="mt-1 text-xs text-emerald-500/80">Resp.: {responsibleName}</p>
         )}
       </button>
+      {operation.clients?.name && (
+        <Link
+          to={`/crm/${operation.client_id}`}
+          onMouseDown={(e) => e.stopPropagation()}
+          onClick={(e) => e.stopPropagation()}
+          className="mt-1 inline-block text-xs text-slate-500 hover:text-emerald-400 hover:underline"
+        >
+          {operation.clients.name} — ver cliente ↗
+        </Link>
+      )}
 
       {(deadlineLabel || hasDescription || (meta?.checklist?.length ?? 0) > 0) && (
         <div className="mt-2 flex flex-wrap items-center gap-2">
@@ -178,7 +188,7 @@ export function OperationCard({
             Avançar →
           </button>
         )}
-        {['PRODUCTION', 'REVIEW'].includes(status) && (
+        {status === 'IN_PROGRESS' && (
           <>
             <button
               type="button"

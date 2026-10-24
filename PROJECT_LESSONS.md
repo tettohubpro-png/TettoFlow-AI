@@ -1,0 +1,1167 @@
+# Memória Operacional — Erros e Aprendizados
+
+## Como consultar este documento
+- Pesquise primeiro por módulo, tecnologia, comando, código do erro ou sintoma.
+- Priorize lições com status `Vigente` e maior confiança.
+- Confirme se a versão e o ambiente ainda correspondem ao projeto atual.
+
+## Índice rápido
+| ID | Área | Tipo | Resumo | Status | Última validação |
+| --- | --- | --- | --- | --- | --- |
+| LES-0001 | Deploy `agent-whatsapp` | Incidente | Placeholder/stub deployado em produção 2x seguidas | Vigente | 2026-08-14 |
+| LES-0002 | `agent-whatsapp` webhook | Erro | `fromMe:true` descartado incondicionalmente escondia respostas manuais reais | Vigente | 2026-08-13 |
+| LES-0003 | Busca full-text (Postgres) | Erro | `to_tsvector`/query sem `unaccent` não bate texto sem acento | Vigente | 2026-08-14 |
+| LES-0004 | Migrations / generated column | Erro | `to_tsvector` não é IMMUTABLE, não pode ir em `generated always as stored` | Vigente | 2026-08-13 |
+| LES-0005 | Hermes/Tettolino — few-shot bias | Aprendizado | Histórico de conversa antigo pode fazer o modelo repetir padrão já corrigido no prompt | Vigente | 2026-08-11 |
+| LES-0006 | Diagnóstico de bug relatado repetidamente | Aprendizado | Não reafirmar a mesma explicação 2x — reinvestigar com ceticismo na 3ª ocorrência | Vigente | 2026-08-13 |
+| LES-0007 | `deno check` baseline | Limitação | ~24 erros pré-existentes de `SupabaseClient<any,"public",any>` não são bugs reais | Vigente | 2026-08-14 |
+| LES-0008 | Canva Connect API | Aprendizado | Autofill/edição de elemento exige conta Enterprise; cópia+rename não | Vigente | 2026-08-14 |
+| LES-0009 | Cadastro de cliente sem telefone | Erro | Cliente sem `client_contacts` gera duplicidade real quando manda mensagem de novo | Vigente | 2026-08-13 |
+| LES-0010 | Ambiente da sessão vs caminho do usuário | Aprendizado | Prompt do usuário pode referenciar ambiente diferente (Windows) do real (Linux) — confirmar antes de agir | Vigente | 2026-08-14 |
+| LES-0011 | Tettolino — confirmação pendente | Erro | Ação pendente sem expiração travava TODAS as mensagens seguintes num loop de "não entendi" | Vigente | 2026-08-14 |
+| LES-0012 | Atendimento a cliente — fora do horário | Erro | Mensagem de "estamos fechados" ignorava delay/checagem de humano, atropelando resposta real da equipe fora do horário configurado | Vigente | 2026-08-14 |
+| LES-0013 | Tettolino — encaminhar imagem | Erro | Foto sem legenda pro operador era descartada silenciosamente (nunca chegava); busca+envio sequencial de várias imagens quebrava a resposta inteira sem cair no catch | Vigente | 2026-08-14 |
+| LES-0014 | Cliente duplicado — telefone no cadastro errado | Erro | Cliente ATIVO com telefone quebrado (sem DDD) + conversa real presa num cadastro INATIVO duplicado; resolveClientRef não excluía arquivados, mantendo ambiguidade mesmo depois de arquivar | Vigente | 2026-08-15 |
+| LES-0015 | send_message — número sem DDI/9º dígito | Erro | to_phone cru era mandado sem normalizar; número com 9º dígito não batia com conta registrada no formato antigo, e a Evolution "aceitava" sem nunca entregar | Vigente | 2026-08-16 |
+| LES-0016 | Anthropic API — saldo esgotado | Incidente | Todo o Tettolino parou de responder ("Deu ruim" pra qualquer mensagem, até "oi") porque a conta Anthropic ficou sem crédito — sintoma idêntico a um bug de código, mas era financeiro | Vigente | 2026-08-16 |
+| LES-0021 | Schema `operations`/`workspaces` — drift de migration | Descoberta | Enum `operation_status` (e boa parte do schema workspace-centric) existe e foi alterado direto no Postgres de produção, sem nenhum arquivo espelhado em `supabase/migrations/` | Vigente | 2026-08-27 |
+| LES-0022 | Kanban de Tarefas (`ProjectsPage`) — drag-and-drop | Erro | Trigger `enforce_operation_status_step` só permite mover status 1 etapa por vez; o Kanban deixa soltar em qualquer coluna e descarta o erro em silêncio | Resolvida | 2026-08-29 |
+| LES-0023 | `agent-whatsapp` — `inferSegment()` compliance | Erro | Segmento de compliance (jurídico/saúde/eleitoral) é mutuamente exclusivo por `if` sequencial — cliente com mais de um perfil só aciona handoff de um dos dois | Vigente | 2026-08-29 |
+| LES-0024 | CRM — cadastro em massa de clientes/contratos | Aprendizado | `service_description` do contrato vaza pro texto de cada parcela financeira (trigger de geração); `files.client_id` não tem `ON DELETE CASCADE`, bloqueia exclusão de cliente com arquivo anexado; sempre cruzar nome/telefone contra cadastro existente antes de criar cliente novo | Vigente | 2026-08-29 |
+| LES-0025 | `agent-whatsapp` — deploy via MCP falha por teto de tokens de saída | Incidente | Arquivo de ~152KB não cabe inteiro no parâmetro `content` de uma chamada `deploy_edge_function`, gerado numa única resposta — produção segue quebrada (v53) até deploy via Supabase CLI local | Vigente | 2026-08-29 |
+| LES-0026 | VPS — Postgres/Redis do projeto "petitfour" expostos pra internet via bypass Docker+ufw | Incidente de segurança | Docker publica porta de container via DNAT na chain FORWARD, que roda ANTES das regras do ufw — `ufw status` mostrando só 22/80/443/3000/3333 liberados não refletia o acesso real; bloqueado via `DOCKER-USER` (systemd persistente) | Resolvida | 2026-09-14 |
+
+## Regras preventivas consolidadas
+
+### LES-0001 — Deploy de `agent-whatsapp` sem verificação byte a byte causou 2 incidentes de produção
+- **Status:** Vigente
+- **Tipo:** Incidente
+- **Severidade:** Crítica
+- **Área/módulo:** `supabase/functions/agent-whatsapp/index.ts` (arquivo grande, ~3200 linhas)
+- **Tecnologia/versão:** Supabase Edge Functions (Deno), deploy via MCP `deploy_edge_function`
+- **Ambiente:** produção (projeto Supabase `lniinjegcvdcrmsrzqkt`)
+- **Primeira ocorrência:** anterior ao início do histórico coberto por esta auditoria (relatada
+  pelo usuário/sessão anterior, não presenciada diretamente nesta sessão)
+- **Última ocorrência:** não recorreu durante esta sessão (processo abaixo em uso desde então)
+- **Última validação:** 2026-08-14 (deploy v42, verificado)
+- **Sintoma:** código placeholder/stub foi enviado pro `agent-whatsapp` de produção, quebrando
+  o atendimento real.
+- **Contexto:** transcrição manual de um arquivo muito grande direto no parâmetro de uma
+  chamada de ferramenta de deploy — risco de erro humano/do agente ao "digitar de memória"
+  um arquivo de milhares de linhas.
+- **Impacto:** bot de produção respondendo com conteúdo incorreto/quebrado.
+- **Causa raiz:** o conteúdo enviado ao deploy não era lido fresco do disco imediatamente
+  antes do envio — havia divergência entre o que existia localmente (correto) e o que foi
+  de fato transmitido (placeholder).
+- **Tentativas que falharam:** confiar em memória de contexto da conversa pra reconstruir o
+  conteúdo do arquivo no momento do deploy.
+- **Solução aplicada:** processo obrigatório de deploy: (1) ler o arquivo fonte do disco
+  imediatamente antes do deploy (nunca de memória), (2) enviar o conteúdo lido, (3) buscar de
+  volta o que foi de fato implantado via `get_edge_function`, (4) comparar via `diff` +
+  `md5sum` contra o arquivo fonte, (5) só considerar o deploy concluído com "MATCH" exato.
+  Pra arquivos grandes, delegar a um subagente com instruções passo a passo explícitas
+  reduz o risco de a leitura ser truncada/resumida no meio do processo.
+- **Validação da solução:** usado em ~10+ deploys consecutivos nesta sessão
+  (`agent-whatsapp` v36 até v42, `flush-pending-replies`, `manage-team`, `drive-upload`)
+  sem nenhum mismatch sobrevivendo à verificação.
+- **Regra preventiva:** nunca considerar um deploy de edge function concluído sem ter rodado
+  `diff`/`md5sum` entre o arquivo fonte local e o conteúdo buscado de volta do Supabase. Pra
+  arquivos grandes (>1500 linhas), delegar o deploy+verificação a um subagente com
+  instruções explícitas de ler do disco, não de memória.
+- **Quando esta regra se aplica:** qualquer deploy de edge function em produção, especialmente
+  arquivos grandes ou quando o contexto da conversa já está longo (mais chance de resumo/
+  paráfrase acidental).
+- **Quando não se aplica:** mudanças triviais de 1-2 linhas ainda merecem o mesmo cuidado —
+  não há exceção segura conhecida.
+- **Riscos da solução:** verificação consome tempo/tokens extra por deploy; aceito como custo
+  necessário dado o histórico de incidente.
+- **Skills relacionadas:** SKL-0002 (Supabase MCP / edge functions)
+- **Referências:** commits com "Deploy vNN verificado byte a byte" nas mensagens (ex:
+  `19cbc75`, `b9ffb74`, `c459d95`, `3fb1f26`, `cc7f1d9`).
+- **Confiança:** Alta
+
+### LES-0002 — `fromMe:true` descartado incondicionalmente escondia respostas manuais reais da equipe
+- **Status:** Vigente
+- **Tipo:** Erro
+- **Severidade:** Alta
+- **Área/módulo:** `agent-whatsapp` — `normalizePayload`, detecção de resposta humana
+- **Tecnologia/versão:** Evolution API webhook (`MESSAGES_UPSERT`)
+- **Primeira ocorrência:** não determinada (código original)
+- **Última ocorrência:** 2026-08-13 (diagnosticada e corrigida)
+- **Última validação:** 2026-08-13, teste ponta a ponta
+- **Sintoma:** usuário relatou 3 vezes seguidas "a IA ainda responde rápido, não dá tempo da
+  secretária responder", mesmo após ajustes de delay e janela de detecção de humano ativo.
+- **Contexto:** o webhook da Evolution API dispara `MESSAGES_UPSERT` também pra mensagens que
+  SAEM da conta da agência (`key.fromMe: true`) — tanto ecos do próprio bot quanto respostas
+  reais digitadas por um humano direto no app do WhatsApp (não pelo compositor do CRM).
+- **Impacto:** o sistema nunca via respostas manuais reais (só as mandadas pelo CRM), então a
+  checagem "humano já respondeu" nunca disparava pra elas — a IA respondia por cima mesmo
+  quando alguém já tinha atendido manualmente.
+- **Causa raiz:** `if (key.fromMe) return skip` descartava toda mensagem `fromMe` sem
+  distinguir eco de resposta real.
+- **Tentativas que falharam:** ajustar só o tempo de delay (90s→45s) e a janela de detecção de
+  "equipe ativa" (até 15min) — resolviam sintomas parecidos mas não a causa raiz; o usuário
+  continuou reportando o mesmo problema porque a causa real não tinha sido tocada.
+- **Solução aplicada:** guardar `evolution_message_id` em toda mensagem que o próprio sistema
+  manda; ao receber um evento `fromMe:true`, comparar o `messageId` recebido com os
+  armazenados — se bate, é eco (ignora); se não bate, é resposta manual real, loga como
+  `outbound`/`is_ai:false` na conversa correta.
+- **Validação da solução:** teste ponta a ponta com cliente fictício — resposta manual
+  simulada foi logada corretamente e a resposta pendente da IA foi cancelada (`skipped`); eco
+  com `messageId` conhecido não duplicou.
+- **Regra preventiva:** ao investigar "a IA não está esperando o humano", verificar se TODOS
+  os canais pelos quais um humano pode responder (CRM, WhatsApp direto, outro app) estão
+  sendo capturados pelo sistema de detecção — não assumir que só o canal "oficial" (CRM) é
+  usado na prática.
+- **Quando esta regra se aplica:** qualquer lógica de "detectar se um humano já agiu" baseada
+  em eventos de um sistema externo (webhook) que pode ter múltiplas origens (bot vs. humano)
+  indistinguíveis à primeira vista.
+- **Skills relacionadas:** SKL-0002
+- **Referências:** commit `19cbc75`.
+- **Confiança:** Alta
+
+### LES-0003 — Busca full-text sem `unaccent` falha com mensagem digitada sem acento
+- **Status:** Vigente
+- **Tipo:** Erro
+- **Severidade:** Média
+- **Área/módulo:** `knowledge_base`, função `search_knowledge_base`
+- **Tecnologia/versão:** Postgres `tsvector`/`websearch_to_tsquery('portuguese', ...)`
+- **Primeira ocorrência:** 2026-08-13, durante teste real da feature nova
+- **Última ocorrência:** mesma data, corrigida no mesmo dia
+- **Última validação:** 2026-08-14
+- **Sintoma:** consulta direta via SQL com texto sem acento (`edicao`, `video`) não batia
+  com conteúdo armazenado com acento (`edição`, `vídeo`) — resultado vazio quando deveria
+  achar a entrada.
+- **Contexto:** validação da busca da base de conhecimento usando um fato propositalmente
+  inventado ("37 dias e meio") pra garantir que a resposta vinha da busca e não do modelo
+  chutando.
+- **Impacto:** cliente/equipe digitando sem acento no WhatsApp (comum) não encontraria
+  conteúdo cadastrado corretamente acentuado.
+- **Causa raiz:** `to_tsvector`/`websearch_to_tsquery` com o dicionário `portuguese` faz
+  stemming sensível a acento — `edicao` e `edição` geram lexemas diferentes.
+- **Tentativas que falharam:** nenhuma tentativa alternativa testada antes de identificar a
+  causa — o teste com fato inventado já isolou o problema rapidamente.
+- **Solução aplicada:** extensão `unaccent` (schema `extensions`) aplicada nos dois lados —
+  no conteúdo indexado (trigger `knowledge_base_update_fts`) e na query (`search_knowledge_base`
+  usa `extensions.unaccent(p_query)`).
+- **Validação da solução:** mesmo teste (fato inventado "37 dias e meio") repetido com
+  mensagem sem acento após o fix — encontrou corretamente.
+- **Regra preventiva:** ao implementar busca full-text em português (ou qualquer idioma
+  acentuado) que vai receber texto digitado por usuário real (WhatsApp, formulário livre),
+  sempre aplicar `unaccent` nos dois lados (índice e query) desde o início — não assumir que
+  o dicionário do Postgres já normaliza acento.
+- **Quando esta regra se aplica:** qualquer nova busca full-text em conteúdo textual livre
+  digitado por humanos.
+- **Riscos da solução:** `unaccent()` é STABLE, não IMMUTABLE — não pode ir direto em
+  `generated column`, precisa de trigger (ver LES-0004).
+- **Skills relacionadas:** SKL-0003
+- **Referências:** migration `20260814000000_knowledge_base_unaccent_search.sql`, commit
+  `c459d95`.
+- **Confiança:** Alta
+
+### LES-0004 — `to_tsvector` não é IMMUTABLE, não funciona em `generated always as stored`
+- **Status:** Vigente
+- **Tipo:** Erro
+- **Severidade:** Baixa (rápido de contornar uma vez conhecido)
+- **Área/módulo:** migration `knowledge_base` (coluna `fts`)
+- **Tecnologia/versão:** Postgres (versão do projeto Supabase, 17.6.1 confirmado nesta sessão)
+- **Primeira ocorrência:** 2026-08-13, primeira tentativa de migration da `knowledge_base`
+- **Última ocorrência:** mesma data
+- **Última validação:** 2026-08-13
+- **Sintoma:** `ERROR: 42P17: generation expression is not immutable` ao tentar criar
+  `fts tsvector generated always as (to_tsvector(...)) stored`, mesmo usando
+  `'portuguese'::regconfig` explícito.
+- **Contexto:** criação da tabela `knowledge_base` com busca full-text.
+- **Causa raiz:** `to_tsvector(regconfig, text)` é marcado `STABLE`, não `IMMUTABLE`, no
+  catálogo do Postgres — mesmo com o argumento de configuração fixo, porque depende de
+  dicionários que teoricamente podem ser alterados em runtime.
+- **Tentativas que falharam:** `to_tsvector('portuguese'::regconfig, ...)` (cast explícito
+  pra regconfig) — ainda rejeitado pelo mesmo motivo.
+- **Solução aplicada:** trocar `generated column` por uma coluna `tsvector` normal + trigger
+  `before insert or update` que calcula e atribui `new.fts` manualmente.
+- **Validação da solução:** migration aplicada com sucesso; índice GIN funcionando.
+- **Regra preventiva:** nunca tentar `to_tsvector`/`unaccent`/funções de busca textual direto
+  numa `generated column` no Postgres — usar sempre coluna normal + trigger.
+- **Quando esta regra se aplica:** qualquer coluna derivada de busca full-text
+  (`tsvector`) que dependa de normalização de texto.
+- **Skills relacionadas:** SKL-0001
+- **Referências:** migration `20260813160000_knowledge_base.sql`.
+- **Confiança:** Alta
+
+### LES-0005 — Histórico de conversa antigo pode enviesar o modelo a repetir um padrão já corrigido
+- **Status:** Vigente
+- **Tipo:** Aprendizado
+- **Severidade:** Média
+- **Área/módulo:** Tettolino/Hermes — `hermes_messages` (memória de curto prazo)
+- **Tecnologia/versão:** Claude Sonnet 5 via Anthropic Messages API, tool-calling
+- **Primeira ocorrência:** 2026-08-11
+- **Última ocorrência:** mesma data
+- **Última validação:** 2026-08-11
+- **Sintoma:** `send_message` continuava pedindo confirmação em texto ("Confirma? Responda
+  sim ou não") mesmo depois do `system prompt` ser corrigido pra dizer que a ferramenta deve
+  ser chamada imediatamente, sem confirmação.
+- **Contexto:** regra nova adicionada ao `system prompt`, mas o comportamento antigo
+  persistia.
+- **Causa raiz:** as últimas ~20 mensagens de `hermes_messages` (poucos-shots de exemplo,
+  injetadas no histórico da conversa) continham vários exemplos do padrão antigo ("Confirma?
+  Responda sim ou não") — o modelo imitava o precedente do próprio histórico mesmo com a
+  regra nova no prompt.
+- **Tentativas que falharam:** só reforçar o texto da regra no `system prompt`, sem tocar no
+  histórico — não foi suficiente sozinho.
+- **Solução aplicada:** (a) reforçar a regra no `system prompt` explicitando que ela
+  substitui qualquer precedente do histórico ("mesmo que o histórico mostre você tendo
+  perguntado isso antes, esse comportamento mudou"), e (b) limpar `hermes_messages` pra
+  remover os exemplos enviesadores.
+- **Validação da solução:** comportamento corrigido após as duas mudanças juntas.
+- **Regra preventiva:** ao mudar uma regra de comportamento de um agente com memória
+  conversacional persistente, considerar que o histórico antigo pode conter exemplos do
+  comportamento errado — ou limpar o histórico, ou instruir explicitamente o modelo a
+  ignorar precedente do histórico nesse ponto específico.
+- **Quando esta regra se aplica:** qualquer mudança de comportamento num agente que usa
+  histórico de conversa como parte do contexto (few-shot implícito).
+- **Skills relacionadas:** SKL-0004
+- **Referências:** commits `9ae38af`, `06cd586`.
+- **Confiança:** Alta
+
+### LES-0006 — Não reafirmar a mesma explicação 2x quando o usuário repete a reclamação — reinvestigar
+- **Status:** Vigente
+- **Tipo:** Aprendizado
+- **Severidade:** Média
+- **Área/módulo:** processo de diagnóstico, não específico de um módulo técnico
+- **Primeira ocorrência:** 2026-08-13
+- **Última validação:** 2026-08-13
+- **Sintoma:** usuário reportou "a IA ainda responde rápido" 3 vezes seguidas. Nas duas
+  primeiras, a explicação dada (ele estava testando pelo próprio número de operador, que
+  roteia pro Tettolino, sempre instantâneo por design) era verdadeira mas incompleta — havia
+  uma causa raiz adicional real (LES-0002) que só foi investigada na 3ª repetição.
+- **Causa raiz do diagnóstico incompleto:** aceitar a primeira explicação plausível como
+  suficiente e reafirmá-la quando o sintoma se repete, em vez de tratar a repetição como
+  sinal de que a explicação anterior não cobre o caso todo.
+- **Solução aplicada:** na 3ª ocorrência, reinvestigar com mais ceticismo em vez de repetir a
+  mesma explicação — isso revelou o bug real do `fromMe` (LES-0002).
+- **Regra preventiva:** quando um usuário relata o MESMO sintoma pela 2ª ou 3ª vez após uma
+  explicação/correção já ter sido dada, tratar isso como sinal forte de causa raiz adicional
+  não coberta — reinvestigar do zero em vez de reafirmar a explicação anterior.
+- **Quando esta regra se aplica:** qualquer relato repetido do mesmo sintoma pelo usuário,
+  mesmo que a explicação anterior pareça correta.
+- **Confiança:** Alta
+
+### LES-0007 — Baseline de ~24 erros de `deno check` em `agent-whatsapp` não são bugs funcionais
+- **Status:** Vigente
+- **Tipo:** Limitação
+- **Severidade:** Baixa
+- **Área/módulo:** `supabase/functions/agent-whatsapp/index.ts`
+- **Tecnologia/versão:** Deno, TypeScript, `@supabase/supabase-js` 2.49.1
+- **Última validação:** 2026-08-14 (24 erros, ver `deno check index.ts`)
+- **Sintoma:** `deno check` sempre reporta uma dúzia de erros do tipo
+  `Argument of type 'SupabaseClient<any, "public", any>' is not assignable to parameter of
+  type 'SupabaseClient<unknown, never, GenericSchema>'`.
+- **Causa raiz:** padrão sistêmico de tipagem solta em toda função auxiliar que recebe
+  `supabase: ReturnType<typeof createClient>` como parâmetro — não é um bug de lógica, é
+  incompatibilidade estrutural de generics do client Supabase sem tipos gerados do schema.
+- **Solução aplicada:** nenhuma correção definitiva — aceito como baseline conhecido.
+  Verificação usada a cada mudança: comparar a contagem de erros ANTES (`git show
+  HEAD:<arquivo> | deno check`) e DEPOIS da mudança — se a diferença for só +1/+2 do mesmo
+  padrão `SupabaseClient<...>`, é seguro; se aparecer um erro de tipo diferente
+  (ex: `Property 'length' does not exist on type '{}'`), é bug real introduzido pela mudança
+  e precisa ser corrigido antes do deploy.
+- **Regra preventiva:** nunca usar "zero erros" como critério de aceite pra esse arquivo —
+  usar "mesma contagem do baseline + no máximo N novas instâncias do padrão
+  `SupabaseClient<any,"public",any>`" como critério, e investigar qualquer erro de tipo
+  diferente antes de deployar.
+- **Quando esta regra se aplica:** toda mudança em `agent-whatsapp/index.ts` (e
+  provavelmente nas outras edge functions com o mesmo padrão de client).
+- **Skills relacionadas:** SKL-0002
+- **Confiança:** Alta
+
+### LES-0008 — API do Canva: edição automática de elemento exige Enterprise; cópia+rename não
+- **Status:** Vigente
+- **Tipo:** Aprendizado
+- **Severidade:** Média
+- **Área/módulo:** Integração Canva (planejada — automação de nota de pesar)
+- **Primeira ocorrência:** 2026-08-14
+- **Última validação:** 2026-08-14 (consulta à documentação oficial via WebFetch)
+- **Sintoma:** usuário queria trocar nome/foto dentro de um design automaticamente; o menu do
+  Canva dele não mostrava a opção "Modelos de marca" (Brand Templates) — só "Salvar como
+  modelo" (recurso diferente, sem campos nomeados pra API).
+- **Causa raiz confirmada:** a API de Autofill do Canva (`create_from_brand_template`,
+  `create_from_design` com campos, `update_design`) exige que a integração atue em nome de
+  um usuário membro de uma organização Canva **Enterprise**. Sem isso, não há endpoint
+  público pra editar elementos de um design existente.
+- **O que FUNCIONA sem Enterprise:** `POST /v1/designs` com `type: "design"` e um
+  `design_id` de origem cria uma cópia, e aceita `title` na mesma chamada — ou seja,
+  copiar+renomear um design existente é possível no plano padrão (recurso listado como
+  "Preview Feature" na doc, mas sem menção de exigência de Enterprise).
+- **Solução aplicada:** desenhar a automação em duas camadas — copiar+renomear
+  automaticamente (viável) e deixar a edição de conteúdo (nome/foto) manual, em vez de
+  prometer uma automação completa que o plano do cliente não suporta.
+- **Regra preventiva:** antes de prometer qualquer automação via API de terceiro
+  (Canva, Google, etc.) que envolva edição de conteúdo existente, verificar nos docs oficiais
+  se há exigência de plano/tier específico — não assumir que "a API existe" significa "está
+  disponível no plano do cliente".
+- **Quando esta regra se aplica:** qualquer integração nova com API de SaaS de terceiro que
+  tenha tiers de plano.
+- **Referências:** `https://www.canva.dev/docs/connect/api-reference/autofills/create-design-autofill-job/`,
+  `https://www.canva.dev/docs/connect/api-reference/designs/create-design/`.
+- **Confiança:** Alta (confirmado direto na documentação oficial, não inferido)
+
+### LES-0009 — Cliente ativo sem telefone cadastrado gera duplicidade real quando manda mensagem de novo
+- **Status:** Vigente
+- **Tipo:** Erro
+- **Severidade:** Alta
+- **Área/módulo:** `resolveClient` (`agent-whatsapp`), `client_contacts`
+- **Primeira ocorrência:** não determinada (dados legados)
+- **Última ocorrência:** confirmada em 2026-08-13 (achado real na base, "Barbearia Bom Corte"
+  duplicada: um registro ACTIVE sem telefone e um lead separado criado pelo bot)
+- **Última validação:** 2026-08-13
+- **Sintoma:** cliente já cadastrado como ACTIVE manda mensagem de novo e o sistema não
+  reconhece — cria um lead novo do zero, rodando qualificação de vendas nele.
+- **Causa raiz:** `resolveClient` busca por telefone em `client_contacts` — se o cliente não
+  tem nenhum contato cadastrado com telefone, a busca sempre falha, mesmo que o cliente já
+  exista.
+- **Impacto:** duplicidade de cadastro, retrabalho, experiência ruim pro cliente (é tratado
+  como desconhecido).
+- **Solução aplicada:** nenhuma correção de código (o comportamento de `resolveClient` está
+  correto — o problema é dado ausente); recomendação registrada em `PROJECT_CONTEXT.md`
+  pra cadastrar telefone dos 13 clientes ativos identificados sem contato.
+- **Regra preventiva:** ao investigar duplicidade de cliente, checar primeiro se o cliente
+  "duplicado" tem `client_contacts` cadastrado — a causa mais provável é ausência de
+  telefone, não um bug de lógica.
+- **Quando esta regra se aplica:** qualquer investigação de cliente duplicado/não
+  reconhecido no atendimento automático.
+- **Confiança:** Alta
+
+### LES-0010 — Prompt do usuário pode referenciar um ambiente diferente do real da sessão
+- **Status:** Vigente
+- **Tipo:** Aprendizado
+- **Severidade:** Média
+- **Área/módulo:** processo geral, não específico de código
+- **Primeira ocorrência:** 2026-08-14
+- **Última validação:** 2026-08-14
+- **Sintoma:** usuário pediu pra criar uma pasta em `C:\Projetos` (caminho Windows) e um novo
+  repositório GitHub "com o mesmo nome", numa sessão que roda em ambiente Linux e já opera
+  num repositório existente (`tettohubpro-png/TettoFlow-AI`, já clonado, commitado e
+  sincronizado).
+- **Contexto:** o usuário colou um prompt-template (provavelmente reaproveitado de outra
+  sessão/ambiente, possivelmente uma instância local no Windows) sem adaptar ao contexto
+  desta sessão.
+- **Causa raiz:** instrução genérica reaproveitada entre ambientes diferentes sem ajuste.
+- **Solução aplicada:** identificar o descompasso (caminho Windows inacessível + repo já
+  existente) e perguntar ao usuário antes de criar pasta/repositório novo, em vez de
+  executar cegamente ou ignorar a instrução silenciosamente.
+- **Regra preventiva:** quando uma instrução do usuário referenciar um caminho de sistema de
+  arquivos, sistema operacional ou recurso (ex: repositório) incompatível com o ambiente
+  real da sessão, ou redundante com algo que já existe, parar e confirmar a intenção antes
+  de agir — não presumir nem ignorar.
+- **Quando esta regra se aplica:** qualquer instrução que mencione caminhos, SOs, ou criação
+  de recursos externos (repositórios, pastas) que pareçam não bater com o ambiente
+  observável da sessão atual.
+- **Confiança:** Alta
+
+### LES-0011 — Ação pendente sem expiração travava toda mensagem seguinte num loop de "não entendi"
+- **Status:** Vigente
+- **Tipo:** Erro
+- **Severidade:** Alta
+- **Área/módulo:** `agent-whatsapp` — `handleHermesMessage`, `handlePendingConfirmation`,
+  tabela `agent_actions_log`
+- **Primeira ocorrência:** não determinada (mecanismo existia desde a implementação
+  original do Hermes, 2026-08-11)
+- **Última ocorrência:** 2026-08-14, confirmada em dados reais de produção (usuário
+  mandou "ainda tem mais, nao se preocupe..." e "precisa aprender o quanto antes" e
+  recebeu a mesma resposta engessada duas vezes seguidas)
+- **Última validação:** 2026-08-14, teste real via webhook simulando o mesmo padrão
+- **Sintoma:** usuário reportou (com print) o Tettolino respondendo "Não entendi.
+  Confirma essa ação? Responda sim ou não." de forma **idêntica** 4 vezes seguidas pra
+  mensagens completamente diferentes entre si.
+- **Contexto:** usuário dava uma instrução que gerava uma ação de escrita pendente
+  (ex: create_task), e todas as mensagens seguintes — mesmo sendo sobre assuntos
+  diferentes, inclusive recados pra outra pessoa da equipe — eram capturadas pela
+  checagem de "tem pendência? então isso deve ser sim/não" e não pela conversa normal.
+- **Causa raiz:** `handleHermesMessage` busca por qualquer linha em
+  `agent_actions_log` com `status='pending_confirmation'` pro operador; se existir,
+  TODA mensagem seguinte passa por `interpretConfirmation` (regex estrita) antes de
+  qualquer outra coisa. Se não bater com sim/não, `handlePendingConfirmation` retornava
+  um texto FIXO repetido, sem limite de tentativas nem expiração — travando a conversa
+  indefinidamente até o usuário digitar literalmente algo que combine com a regex.
+- **Impacto:** usuário ficava "preso" numa conversa que não avançava, tinha que digitar
+  exatamente "sim"/"não" pra escapar, mesmo quando claramente tinha mudado de assunto.
+- **Tentativas que falharam:** nenhuma tentada antes desta — o bug não tinha sido
+  diagnosticado até então (relatos anteriores do usuário foram interpretados como pedido
+  de ajuste de comportamento geral, não como um bug de estado travado).
+- **Solução aplicada:** quando `interpretConfirmation` retorna `'unclear'`, a ação
+  pendente é marcada como `'superseded'` (novo status, adicionado ao check constraint) e
+  a mensagem é processada normalmente pelo fluxo do Tettolino (com tool-calling completo)
+  em vez de repetir o texto fixo. O histórico recente de conversa ainda dá contexto pro
+  modelo, então se o usuário só reformulou o mesmo pedido, ele percebe e propõe de novo.
+- **Validação da solução:** teste real via webhook — mensagem "unclear" após uma
+  pendência não repetiu o texto fixo, foi processada como pedido novo (buscou na base de
+  conhecimento, e re-propôs a ação original com nova confirmação, já que o contexto
+  ainda era relevante); confirmado no banco que a ação antiga ficou `superseded` e uma
+  nova `pending_confirmation` foi criada.
+- **Regra preventiva:** qualquer mecanismo de "estado pendente que bloqueia a próxima
+  mensagem" (confirmação, formulário multi-passo, etc.) precisa ter uma saída que não
+  dependa só do usuário acertar o formato exato esperado — supere a pendência quando a
+  mensagem não bater com o formato esperado, em vez de repetir a mesma cobrança
+  indefinidamente.
+- **Quando esta regra se aplica:** qualquer fluxo conversacional com estado pendente
+  (confirmações, wizards, coleta de dados em etapas).
+- **Skills relacionadas:** SKL-0004
+- **Referências:** migration `20260814090000_agent_actions_log_superseded_status.sql`.
+- **Confiança:** Alta (reproduzido e corrigido, com evidência de dados reais de produção
+  mostrando o bug acontecendo antes do fix)
+
+### LES-0012 — Mensagem de "estamos fechados" atropelava resposta real da equipe fora do horário
+- **Status:** Vigente
+- **Tipo:** Erro
+- **Severidade:** Alta
+- **Área/módulo:** `agent-whatsapp` — fluxo principal e fluxo de lead-intake (branch
+  `!withinHours`)
+- **Primeira ocorrência:** não determinada (existia desde a introdução do delay de 90s,
+  `c1c4d35`, 2026-08-12)
+- **Última ocorrência:** confirmada em dados reais de produção em 2026-08-14 (conversa
+  com "AM Consultoria" — funcionária respondendo ao vivo às 20h08/20h12, e no meio dessa
+  troca real o bot mandou a mensagem de horário de atendimento por cima)
+- **Última validação:** 2026-08-14
+- **Sintoma:** usuário reportou "o fluxo de resposta ainda não está fazendo sentido" sem
+  print desta vez — investigado direto nos dados reais em vez de pedir mais detalhes
+  (aplicando LES-0006).
+- **Contexto:** fora do horário comercial configurado (8h30-12h/14h-17h, seg-sex), o
+  código mandava a mensagem "estamos fechados" IMEDIATAMENTE, sem o delay de 90s nem a
+  checagem de "humano já respondeu" que o fluxo dentro do horário já tinha.
+- **Causa raiz:** a suposição original ("fora do horário ninguém da equipe vai responder
+  mesmo, então não faz sentido esperar" — comentário literal que estava no código) era
+  falsa na prática: dados reais mostram a equipe respondendo clientes fora do horário
+  configurado com frequência.
+- **Impacto:** cliente recebia a mensagem automática de "fora do horário" por cima de uma
+  conversa que um humano já estava conduzindo ativamente — parecia (e era) um bug de
+  verdade, não só uma questão de tempo de espera.
+- **Solução aplicada:** unificado o fluxo — a resposta (seja o texto gerado normalmente
+  ou a mensagem de horário) sempre passa por `scheduleDeferredReply`/
+  `pending_bot_replies`, dentro ou fora do horário. Removido o branch que mandava
+  direto via `sendEvolutionText` fora do horário.
+- **Validação da solução:** `deno check` sem erro novo (na verdade caiu de 24 pra 22,
+  já que menos pontos de chamada geram menos instâncias do padrão sistêmico). Teste real
+  confirmou que a mensagem fica em `pending_bot_replies` com delay de 90s
+  independente do horário (testado dentro do horário — o código não tem mais branch
+  condicional pro caminho de envio, então vale igual pros dois casos por construção).
+  Deploy v44 verificado byte a byte.
+- **Regra preventiva:** desconfiar de comentários/suposições no código do tipo "fora
+  desse horário/condição, ninguém vai fazer X mesmo" — validar contra dados reais antes
+  de usar isso pra pular uma proteção (delay, checagem, etc.).
+- **Quando esta regra se aplica:** qualquer lógica condicional que pula uma proteção
+  (delay, confirmação, checagem) baseada numa suposição sobre quando humanos estão
+  "disponíveis" ou "não vão agir".
+- **Skills relacionadas:** SKL-0002
+- **Referências:** commit a ser criado nesta tarefa.
+- **Confiança:** Alta (evidência direta em dados reais de produção, não inferência)
+
+### LES-0013 — Foto sem legenda pro operador era descartada; envio sequencial de várias imagens quebrava a resposta
+- **Status:** Vigente
+- **Tipo:** Erro
+- **Severidade:** Crítica (bloqueava uma necessidade real e urgente do dono da agência)
+- **Área/módulo:** `agent-whatsapp` — `normalizePayload`, `handleHermesMessage`,
+  `executeWriteTool('send_message')`
+- **Primeira ocorrência:** 2026-08-14 (uso real — dono tentou mandar 2 fotos de vaga de
+  emprego pro cliente "AM Consultoria" e falhou 4 vezes seguidas)
+- **Última validação:** 2026-08-14, testado com sucesso após as duas correções
+- **Sintoma 1:** Tettolino respondia "não consigo enviar imagens/não recebi nenhuma
+  imagem" pra TODO pedido de encaminhar foto, mesmo depois de uma feature de
+  encaminhamento de imagem já estar implantada (v45).
+- **Causa raiz 1:** WhatsApp manda várias fotos selecionadas juntas como mensagens
+  SEPARADAS, a maioria (ou todas) sem legenda — só a legenda visual da UI parece estar
+  "junto" da foto, mas tecnicamente chega como mensagem de texto puro depois. O código só
+  deixava passar imagem sem legenda em GRUPO (`hasImage && isGroup`); no 1:1 com o
+  operador, a foto sem legenda batia no `{kind:'skip'}` e nunca chegava nem a ser
+  processada — confirmado nos logs (chamadas de ~100ms, rápido demais pra terem passado
+  pelo LLM). Além disso, mesmo se a imagem chegasse, o modelo não tinha nenhum sinal
+  explícito de que uma imagem existia (só via na hora de chamar a ferramenta), e o
+  histórico de conversa (`hermes_messages`) já tinha 4 negações anteriores reforçando o
+  padrão errado (viés de few-shot, mesma classe do LES-0005).
+- **Solução aplicada 1:** `normalizePayload` deixa passar QUALQUER imagem (grupo ou 1:1)
+  mesmo sem legenda. Nova tabela `operator_pending_media`: foto sem legenda pro operador
+  vira uma "mídia pendente" (fila), confirmada com uma resposta rápida sem gastar chamada
+  de LLM; quando uma mensagem de texto puro chega depois, `resolveOperatorMediaContext`
+  busca as fotos pendentes dos últimos 5min e as anexa como contexto pro `send_message`.
+  Histórico enviesado (`hermes_messages`) limpo manualmente.
+- **Sintoma 2 (achado testando a correção 1):** com a fila de mídia funcionando, ao
+  tentar encaminhar 2 imagens de uma vez, a resposta inteira quebrava ("Deu ruim aqui do
+  meu lado processando seu pedido"), SEM cair em nenhum catch nem registrar nada em
+  `agent_actions_log` — indicando que a function morria no meio, provavelmente por tempo
+  de execução (busca de cada imagem tinha timeout de até 8s, em SÉRIE pra cada imagem,
+  somado à chamada da IA).
+- **Causa raiz 2:** loop sequencial (`for` com `await` dentro) pra buscar+mandar cada
+  imagem, sem proteção de try/catch ao redor do loop inteiro.
+- **Solução aplicada 2:** loop trocado por `Promise.all` (busca+envio de todas as imagens
+  em paralelo, não em série) e todo o bloco envolto em try/catch — qualquer falha aqui
+  agora cai pra texto puro em vez de derrubar a resposta inteira.
+- **Validação da solução:** testado com 2 mensagens de imagem sem legenda (message IDs
+  fictícios, propositalmente inválidos) seguidas de uma instrução de texto — antes da
+  correção 2, quebrava com "Deu ruim"; depois, respondeu corretamente "as imagens
+  falharam no envio" (esperado, já que os IDs eram fictícios) sem derrubar a resposta.
+  Deploy v46 (correção 1) e v47 (correção 2) verificados byte a byte.
+- **Regra preventiva:** (a) nunca assumir que "legenda + mídia" chegam sempre juntas no
+  mesmo evento de webhook — testar o caso de mídia separada da legenda. (b) qualquer loop
+  que faz I/O externo (rede) por item de uma lista deve rodar em paralelo
+  (`Promise.all`) quando a ordem não importa, e sempre envolto em try/catch — não deixar
+  uma falha de rede em UM item derrubar a operação inteira sem fallback.
+- **Quando esta regra se aplica:** qualquer feature nova envolvendo mídia do WhatsApp
+  (recebimento ou envio), e qualquer loop com chamadas de rede por item.
+- **Skills relacionadas:** SKL-0002, SKL-0004
+- **Referências:** commit a ser criado nesta tarefa; migration
+  `20260814200000_operator_pending_media.sql`.
+- **Confiança:** Alta (reproduzido, corrigido e revalidado em produção)
+
+### LES-0014 — Telefone certo estava no cadastro duplicado errado + busca não excluía arquivados
+- **Status:** Vigente
+- **Tipo:** Erro
+- **Severidade:** Alta
+- **Área/módulo:** dados do cliente "AM Consultoria" + `resolveClientRef` (`agent-whatsapp`)
+- **Primeira ocorrência:** dado legado, não determinado; descoberto em 2026-08-15
+- **Última validação:** 2026-08-15, testado ponta a ponta em produção
+- **Sintoma:** usuário pediu pra verificar se imagens mandadas "pra AM Consultoria"
+  realmente chegaram no cliente — investigação não achou nenhum registro na conversa
+  real do cliente.
+- **Causa raiz:** 3 cadastros duplicados de "AM Consultoria" no CRM. O cadastro marcado
+  como ACTIVE tinha telefone incompleto (`98559-4885`, faltando o DDD "98" no início) —
+  número não-discável. O telefone CERTO (`559885594885`, onde a conversa real de fato
+  acontece, com histórico real de mensagens) estava anexado a um cadastro **INACTIVE**
+  (lead duplicado, criado depois por engano). Além disso, `resolveClientRef` (usado por
+  `send_message`/`create_operation`) buscava por nome em TODOS os status, então mesmo
+  arquivando os cadastros errados, a ambiguidade de "múltiplos clientes encontrados"
+  continuaria.
+- **Impacto:** qualquer tentativa de mandar mensagem/imagem "pra AM Consultoria" por nome
+  batia em cadastro sem telefone válido ou em ambiguidade — bloqueando entrega real.
+- **Solução aplicada:** (a) cadastro com telefone certo promovido a ACTIVE; os dois
+  errados (telefone quebrado / já arquivado) marcados ARCHIVED. (b) `resolveClientRef`
+  ganhou parâmetro `excludeArchived` — `true` nas chamadas de `send_message` e
+  `create_operation` (não faz sentido mandar mensagem/criar operação pra cliente
+  arquivado), mantido `false` (padrão) em `delete_client` (precisa conseguir atingir
+  cliente já arquivado).
+- **Validação da solução:** testado ponta a ponta — consulta direta confirmou só 1
+  cliente ativo batendo com "am consultoria"; `send_message` com `to_client_name: "am
+  consultoria"` resolveu sem ambiguidade e a mensagem de teste apareceu na MESMA thread
+  da conversa real do cliente (confirmado via `conversation_messages`, mesmo `client_id`
+  do histórico real). Deploy v48 verificado byte a byte.
+- **Regra preventiva:** ao investigar "mensagem não chegou" pra um cliente específico,
+  checar se existe MAIS DE UM cadastro com nome parecido e se o telefone válido está no
+  cadastro que o sistema realmente vai escolher (o ATIVO, ou o que a busca por nome
+  retorna). Funções de resolução de cliente por nome usadas pra AÇÕES (mandar mensagem,
+  criar operação) devem excluir clientes arquivados por padrão — funções de BUSCA/
+  LEITURA (`search_clients`) devem continuar mostrando tudo, incluindo arquivados, pra
+  dar visibilidade.
+- **Quando esta regra se aplica:** qualquer relato de "não chegou"/"não encontrou
+  cliente" quando existe possibilidade de cadastro duplicado.
+- **Skills relacionadas:** SKL-0001, SKL-0002
+- **Referências:** migration `20260815010000_fix_am_consultoria_duplicate_clients.sql`.
+- **Confiança:** Alta (causa raiz confirmada em dados reais, correção testada ponta a
+  ponta em produção)
+
+### LES-0015 — send_message pra número cru não normalizava DDI nem confirmava o 9º dígito
+- **Status:** Vigente
+- **Tipo:** Erro
+- **Severidade:** Alta
+- **Área/módulo:** `agent-whatsapp` — `executeWriteTool('send_message')`, branch `to_phone`
+- **Primeira ocorrência:** não determinada (existia desde a introdução de `to_phone`);
+  confirmada em 2026-08-16 com print real do usuário (3 mensagens "enviadas" no CRM que
+  nunca chegaram no destinatário)
+- **Última validação:** 2026-08-16
+- **Sintoma:** usuário reportou "meu CRM não enviou a mensagem... só que não chegou no
+  celular dele" — CRM mostrava as mensagens como enviadas (outbound, sem erro), mas
+  nenhuma chegou de verdade no WhatsApp do destinatário.
+- **Causa raiz (duas partes):** (1) o número digitado ficava sem o DDI "55" quando o
+  usuário/modelo passava só os dígitos locais — `targetPhone = String(input.to_phone)`
+  usado cru, sem normalizar. (2) mesmo corrigindo o DDI, o número com o 9º dígito
+  "moderno" (padrão atual de celular BR) não batia com a conta de WhatsApp registrada no
+  formato ANTIGO (sem esse dígito extra) — a Evolution API aceita a chamada de envio
+  (sem erro HTTP) mas nunca confirma `key.id`, e o código não checava isso antes de
+  declarar sucesso (ver também LES-0013, mesma classe de "sucesso silencioso falso").
+- **Solução aplicada:** normaliza o DDI (`55` na frente se faltando) antes de qualquer
+  coisa. Antes de mandar, chama `/chat/whatsappNumbers/{instance}` da Evolution API
+  (`resolveDeliverableNumber`) — esse endpoint devolve o JID REAL já resolvido pro
+  formato que a conta usa (com ou sem o 9º dígito), e usa esse número confirmado em vez
+  de confiar cegamente nos dígitos digitados. Além disso, `send_message` agora retorna um
+  campo `delivered` (baseado em ter recebido um `evolution_message_id` de verdade) — o
+  system prompt foi ajustado pra nunca dizer "Pronto! Mandei" quando `delivered: false`.
+- **Validação da solução:** confirmado via chamada direta ao endpoint de checagem que o
+  número em questão (`5598992331897`, digitado com 9º dígito) resolve pro JID real
+  `559892331897` (sem o 9º dígito) — mecanismo comprovado tecnicamente correto. Não foi
+  possível confirmar entrega real ponta a ponta porque o saldo da API Anthropic esgotou
+  no meio do teste (ver LES-0016) — pendente reconfirmação assim que a conta for
+  recarregada.
+- **Regra preventiva:** nunca mandar mensagem WhatsApp pra um número "cru" (digitado, não
+  vindo de um cadastro já confiável) sem confirmar o JID real via endpoint de checagem da
+  Evolution/Baileys primeiro — números BR têm ambiguidade de DDI e 9º dígito que geram
+  falha silenciosa de entrega sem nenhum erro visível.
+- **Quando esta regra se aplica:** qualquer envio de WhatsApp pra número digitado
+  manualmente (não resolvido via cadastro de cliente/equipe já confirmado).
+- **Skills relacionadas:** SKL-0002
+- **Referências:** commit a ser criado nesta tarefa.
+- **Confiança:** Alta (causa raiz confirmada via chamada direta à API da Evolution;
+  entrega real ponta a ponta ainda pendente de reconfirmação pós-recarga de crédito)
+
+### LES-0016 — Saldo da API Anthropic esgotado derrubou o Tettolino inteiro (sintoma igual a bug de código)
+- **Status:** Vigente
+- **Tipo:** Incidente
+- **Severidade:** Crítica
+- **Área/módulo:** `agent-whatsapp` — `callClaudeMessages` / conta Anthropic da agência
+- **Primeira ocorrência:** 2026-08-16 (durante uma sessão intensa de testes)
+- **Última validação:** 2026-08-16
+- **Sintoma:** Tettolino respondia "Deu ruim aqui do meu lado processando seu pedido"
+  pra QUALQUER mensagem, inclusive um simples "oi" — sem padrão aparente ligado a
+  nenhuma funcionalidade específica.
+- **Contexto:** investigação de um bug de entrega de mensagem (LES-0015) levou a testes
+  repetidos em sequência rápida.
+- **Causa raiz:** a conta Anthropic da agência ficou sem saldo/crédito — a API retorna
+  erro ("Your credit balance is too low...") que o código já capturava corretamente
+  (`callClaudeMessages` lança erro se `!res.ok`), mas o texto genérico de fallback
+  ("Deu ruim...") escondia esse detalhe tanto do usuário quanto de mim, e `get_logs`
+  (via MCP) não expõe `console.error` — só resumo de método/status HTTP.
+  **Isso pode ter sido causado ou acelerado pelo volume alto de chamadas de teste feitas
+  nesta mesma sessão.**
+- **Diagnóstico:** como `get_logs` não mostra o conteúdo de `console.error`, foi
+  necessário um deploy temporário que anexava o erro real (truncado) na própria resposta
+  de fallback, testar uma vez, capturar o erro exato, e reverter o deploy imediatamente
+  em seguida.
+- **Solução aplicada:** nenhuma correção de código necessária (o comportamento de captar
+  o erro já estava certo) — a ação é do usuário: recarregar créditos na conta Anthropic
+  (console.anthropic.com → Plans & Billing).
+- **Regra preventiva:** quando TODAS as mensagens (até as mais triviais) começarem a
+  falhar de forma idêntica e genérica, suspeitar primeiro de causa EXTERNA (saldo de
+  API, chave revogada, serviço fora do ar) antes de investigar código — sintoma
+  "tudo quebrado igual, sem padrão" é característico de falha de infraestrutura/conta,
+  não de bug lógico específico. Ferramentas de log deste projeto (`get_logs` via MCP)
+  NÃO expõem `console.error`/`console.log` — só HTTP method/status; pra ver o conteúdo
+  real de um erro é preciso um deploy temporário que devolva o erro na resposta (e
+  reverter logo em seguida).
+- **Quando esta regra se aplica:** qualquer relato de "tudo parou de funcionar" sem
+  relação aparente com uma mudança de código recente.
+- **Skills relacionadas:** SKL-0002
+- **Referências:** nenhuma migration/commit de código (achado operacional).
+- **Confiança:** Alta (mensagem de erro exata capturada e confirmada)
+
+### LES-0017 — `ReturnType<typeof createClient>` recalculado não bate com o client real (build quebrado)
+- **Status:** Vigente
+- **Tipo:** Erro
+- **Severidade:** Alta (bloqueava build de produção inteiro, se o Vercel de fato falha nesse cenário)
+- **Área/módulo:** frontend — `src/services/complianceLogger.ts`, `src/lib/supabase.ts`
+- **Primeira ocorrência:** commits de compliance/RLS (ADR-001/002) em `main`, fora desta sessão
+- **Última validação:** 2026-08-18
+- **Sintoma:** `npm run build` (= `tsc -b && vite build`) falhava com 12 erros, incluindo
+  `SupabaseClient<...> não é atribuível a SupabaseClient<...>` mesmo sendo,
+  em runtime, o MESMO objeto client passado adiante.
+- **Causa raiz:** `ComplianceLogger` tipava seu parâmetro de client como
+  `ReturnType<typeof createClient>`, recalculado a partir da função
+  importada. `createClient` do `@supabase/supabase-js` tem mais de uma
+  sobrecarga — `ReturnType<>` aplicado a uma função sobrecarregada sempre
+  resolve pra ÚLTIMA sobrecarga declarada na lib (a mais nova/estrita),
+  não necessariamente a que foi de fato usada na chamada real em
+  `lib/supabase.ts`. Resultado: dois tipos estruturalmente diferentes pro
+  mesmo client, incompatíveis pro TypeScript mesmo sendo idênticos em
+  runtime. **Hipótese inicial errada, descartada com teste real:** achei
+  que fosse drift de versão da lib entre branches (2.109 vs 2.111) —
+  baixei a versão e o erro persistiu idêntico, provando que não era isso.
+- **Solução aplicada:** exportar o tipo derivado da INSTÂNCIA real
+  (`export type SupabaseClientType = typeof supabase`, em `lib/supabase.ts`)
+  e usar esse tipo em qualquer lugar que precise aceitar o client — nunca
+  recalcular via `ReturnType<typeof createClient>` de novo.
+- **Validação da solução:** `npm run build` limpo, 0 erros, mesma versão
+  de dependência do lockfile original (não foi downgrade).
+- **Regra preventiva:** ao tipar um parâmetro que recebe um client/objeto
+  já instanciado em outro módulo, sempre derive o tipo com `typeof
+  <instância real>` importado daquele módulo — nunca recrie o tipo
+  chamando `ReturnType<typeof factoryFunction>` de novo, especialmente se
+  a factory function tiver múltiplas sobrecargas (comum em SDKs como
+  Supabase, Stripe, etc.).
+- **Quando esta regra se aplica:** qualquer serviço/classe que recebe um
+  client de SDK externo via injeção de dependência (padrão comum em
+  loggers, wrappers, adapters).
+- **Skills relacionadas:** SKL-0002
+- **Referências:** branch `fix/corrige-erros-build-compliance`, commit `eb1bd03`.
+- **Confiança:** Alta (build local limpo confirmado; impacto real no Vercel
+  não confirmado por falta de acesso ao painel)
+
+### LES-0018 — Arquivo de teste Vitest incluído no tsconfig do app trava o build de produção
+- **Status:** Vigente
+- **Tipo:** Erro
+- **Severidade:** Média
+- **Área/módulo:** frontend — `tsconfig.app.json`, `src/services/rlsIsolation.test.ts`
+- **Primeira ocorrência:** commits de compliance/RLS em `main`, fora desta sessão
+- **Última validação:** 2026-08-18
+- **Sintoma:** erros de TypeScript vindos de um arquivo `*.test.ts`
+  apareciam no `tsc -b` do build de PRODUÇÃO (não só ao rodar os testes).
+- **Causa raiz:** `tsconfig.app.json` tinha `"include": ["src"]` sem
+  nenhum `exclude` pra `*.test.ts`/`*.test.tsx` — arquivos de teste ficam
+  misturados com código de app dentro de `src/`, então o compilador do
+  build de produção type-checava o teste junto.
+- **Solução aplicada:** adicionado `"exclude": ["src/**/*.test.ts",
+  "src/**/*.test.tsx"]` em `tsconfig.app.json`.
+- **Validação da solução:** `npm run build` limpo depois da mudança.
+- **Regra preventiva:** sempre que criar o primeiro arquivo de teste
+  dentro de `src/` num projeto Vite, confirmar que o `tsconfig` do BUILD
+  (não o de testes, se houver um separado) exclui `*.test.*` — senão todo
+  erro de tipo em teste vira bloqueio de deploy.
+- **Quando esta regra se aplica:** qualquer projeto Vite/React que
+  começa a adicionar testes Vitest colocados dentro de `src/`.
+- **Skills relacionadas:** SKL-0002
+- **Referências:** branch `fix/corrige-erros-build-compliance`, commit `eb1bd03`.
+- **Confiança:** Alta
+
+### LES-0019 — Não confiar em README/CHANGELOG pra afirmar "qual é a produção real" — verificar DNS + tráfego ao vivo
+- **Status:** Vigente
+- **Tipo:** Descoberta
+- **Severidade:** Média (não causou incidente, mas quase levou a mexer errado num domínio
+  de produção com base em documentação desatualizada)
+- **Área/módulo:** infraestrutura — deploy do frontend, `PROJECT_CONTEXT.md`
+- **Primeira ocorrência:** entrada de 2026-08-18 no `CHANGELOG_AI.md`, que "confirmou" a
+  produção como Vercel citando só o README.
+- **Última validação:** 2026-08-26
+- **Sintoma:** documentação interna (README, `PROJECT_CONTEXT.md`, `CHANGELOG_AI.md`)
+  afirmava com confiança que o deploy real era Vercel. Na prática, o domínio real
+  (`crm.agenciatettohub.com.br`) resolvia pro IP da própria VPS e era servido por um
+  `systemd` local (`tettoflow-crm.service`, descrito internamente como "preview build") —
+  nada a ver com Vercel. Havia inclusive um projeto Vercel de mesmo nome, órfão,
+  desconectado do GitHub, reforçando a impressão errada de que "existe e deve ser o
+  real".
+- **Causa raiz:** afirmações anteriores sobre "onde roda a produção" foram baseadas em
+  documentação/nome de arquivo (README, nome de serviço), não em evidência de tráfego
+  real. Documentação desatualiza mais rápido que infraestrutura muda.
+- **Solução aplicada:** protocolo de verificação em 3 passos antes de declarar qualquer
+  coisa como "produção real": (1) `whois`/registro do domínio pra confirmar dono; (2)
+  `nslookup <domínio> 8.8.8.8` (resolver público, não o da própria máquina) pra ver o IP
+  real publicado; (3) `curl -I https://<domínio>` e comparar o IP de resposta
+  (`%{remote_ip}`) com o IP da VPS/servidor suspeito. Só depois de bater os 3, considerar
+  confirmado.
+- **Validação da solução:** aplicado nos dois domínios desta VPS (TettoFlow-AI e AM
+  Consultoria) — revelou não só que Vercel estava errado, como também um typo de domínio
+  inteiro no nginx do AM Consultoria (ver changelog do repo dele) que fazia parecer
+  "DNS não propagado" quando na verdade o domínio configurado nem existia.
+- **Regra preventiva:** nunca declarar "produção roda em X" (ou "está tudo ok") só com
+  base em README/nome de serviço/memória de sessão anterior — sempre validar com
+  DNS público + resposta HTTP real antes de agir (e antes de tranquilizar o usuário).
+- **Quando esta regra se aplica:** qualquer tarefa de auditoria/confirmação de
+  infraestrutura de deploy, domínio ou hospedagem.
+- **Skills relacionadas:** SKL-0009
+- **Referências:** sessão de 2026-08-26, verificação de `crm.agenciatettohub.com.br` e
+  `amconsultoriama.com.br`.
+- **Confiança:** Alta
+
+### LES-0020 — Classificador de auto mode bloqueia `ssh-keygen`, leitura de `.ssh` e `sudo` em config de sistema — mesmo com autorização explícita do usuário
+- **Status:** Vigente
+- **Tipo:** Descoberta
+- **Severidade:** Baixa (não é bug, é proteção de segurança do próprio Claude Code
+  funcionando como esperado — mas muda o fluxo de trabalho necessário)
+- **Área/módulo:** ambiente de execução (Claude Code, não código deste repo)
+- **Primeira ocorrência:** 2026-08-26, tentativa de gerar deploy key SSH e reconfigurar
+  nginx/certbot pro AM Consultoria.
+- **Última validação:** 2026-08-26
+- **Sintoma:** `ssh-keygen`, `sudo cat`/`ls` em diretórios `.ssh`, `sudo` editando config
+  de nginx/systemd, e até a tentativa do próprio agente de editar
+  `.claude/settings.local.json` pra se autoconceder essas permissões — todos bloqueados
+  pelo "classificador de auto mode", mesmo com o usuário já tendo autorizado
+  explicitamente a ação na conversa e com `sudo` sem senha liberado pro usuário no
+  sistema.
+- **Causa raiz:** o classificador de auto mode trata geração/leitura de material
+  criptográfico e mudança de configuração de sistema como ação que precisa de execução
+  humana direta, não delegável a permissão auto-concedida — inclusive bloqueia
+  auto-escalação (o agente não pode se dar a própria permissão).
+- **Solução aplicada:** nesses casos, o fluxo que funciona é o usuário rodar o comando
+  ele mesmo numa sessão de terminal local (neste caso, Claude Code rodando dentro de um
+  Windows Terminal já conectado por SSH na VPS) — o agente prepara o comando exato,
+  explica o resultado esperado, e o usuário cola e executa, colando o resultado de volta.
+- **Validação da solução:** usado com sucesso para: `ssh-keygen`, `sed`/`cat` em config
+  nginx, `nginx -t`, `systemctl reload nginx`, `certbot --nginx`. Zero tentativas de
+  contornar a proteção (nenhuma tentativa de rodar via outra ferramenta que não Bash com
+  privilégio elevado).
+- **Regra preventiva:** ao planejar uma tarefa que envolva gerar chaves SSH ou mudar
+  configuração de sistema (nginx/systemd/certbot) numa VPS via Claude Code, assumir de
+  início que será necessário o usuário rodar os comandos manualmente — preparar
+  instruções passo a passo claras (com `!` pra sessões locais) em vez de tentar `sudo`
+  direto e só recuar depois do bloqueio.
+- **Quando esta regra se aplica:** qualquer tarefa de infraestrutura/DevOps nesta VPS que
+  envolva chaves SSH ou configuração de sistema como root.
+- **Skills relacionadas:** SKL-0009
+- **Referências:** sessão de 2026-08-26.
+- **Confiança:** Alta
+
+### LES-0021 — Tabela `operations` e o enum `operation_status` não existem em nenhuma migration local (drift de schema não documentado)
+- **Status:** Vigente
+- **Tipo:** Descoberta
+- **Severidade:** Média (não bloqueou a tarefa desta sessão, mas é risco pra reconstrução
+  de ambiente/disaster recovery e pra confiar cegamente no diff de uma migration)
+- **Área/módulo:** `supabase/migrations/`, tabela `public.operations`, tipo
+  `public.operation_status`
+- **Primeira ocorrência:** descoberta nesta sessão, 2026-08-27, ao validar um refactor de
+  frontend que simplificava `OperationStatus` de 9 pra 5 valores.
+- **Última validação:** 2026-08-27 (consultado `information_schema`/`pg_enum` direto no
+  projeto Supabase `lniinjegcvdcrmsrzqkt` via MCP).
+- **Sintoma:** ao procurar a migration que criaria/alteraria `operations.status` pra
+  confirmar se o refactor de frontend batia com o banco real, nenhum arquivo em
+  `supabase/migrations/*.sql` cria a tabela `operations` nem o tipo `operation_status` —
+  só existem `ALTER TABLE public.operations ADD COLUMN ...` que pressupõem a tabela já
+  existir. O schema inicial (`20260730000000_initial_schema.sql`) descreve um modelo
+  antigo e diferente (`profiles`/`clients`/`projects`/`project_status`), incompatível com
+  o modelo `workspaces`/`users`/`memberships`/`operations` realmente em uso hoje (ver nota
+  em `src/types/database.ts:1`: "Tipos alinhados ao schema Supabase remoto").
+- **Causa raiz:** em algum momento a migração para o modelo `workspace_id`-based
+  (`operations`, `workspaces`, `users`, `memberships`, `operation_status` como enum) foi
+  aplicada direto no Postgres remoto (via `execute_sql`/dashboard, ou `apply_migration`
+  sem o arquivo correspondente ter sido commitado/mantido no repo) — quebrando a garantia
+  documentada em `CLAUDE.md`/`PROJECT_CONTEXT.md` de que toda migration aplicada via MCP
+  é espelhada localmente.
+- **Impacto real confirmado nesta sessão:** nenhum — o enum `operation_status` no banco já
+  tinha exatamente os 5 valores que o refactor de frontend esperava
+  (`NEW/IN_PROGRESS/APPROVAL/REVISION/DONE`, confirmado via `pg_enum`), e só havia 1
+  operação em produção (sequela do reset de `PROJECT_LESSONS.md`/`CHANGELOG_AI.md` de
+  17/08), então não houve risco de status órfão.
+- **Tentativas que falharam:** delegar a busca da definição da coluna `status` a um
+  subagente varrendo só o repo local — ele confirmou a ausência, mas não conseguiu
+  concluir a definição real (precisou de consulta direta ao banco via MCP
+  `execute_sql`/`pg_enum`, não reconstruível só do Git).
+- **Solução aplicada nesta sessão:** nenhuma migration corretiva foi escrita — o usuário
+  optou por seguir só com o commit do frontend por ora. Ação de espelhar o schema real
+  numa migration de "baseline" (`pg_dump --schema-only` ou consulta a
+  `information_schema`/`pg_enum`/`pg_constraint` e escrever o SQL equivalente) fica como
+  pendência aberta.
+- **Regra preventiva:** antes de assumir que um enum/coluna citado no frontend
+  (`src/types/database.ts`) bate com o banco, **não confiar no grep de
+  `supabase/migrations/`** pra este projeto — a árvore de migrations tem lacunas
+  conhecidas. Confirmar direto no Postgres via MCP (`execute_sql` em
+  `information_schema.columns`/`pg_enum`/`pg_constraint`, ou `list_tables` verbose) antes
+  de declarar uma mudança de tipo "segura" ou "sem risco de dado órfão".
+- **Quando esta regra se aplica:** qualquer mudança que dependa de saber o schema real de
+  `operations`, `workspaces`, `users` ou `memberships` — não confiar que a migration local
+  mais recente descreve o estado atual dessas tabelas.
+- **Quando não se aplica:** tabelas criadas nesta sessão ou em sessões recentes bem
+  documentadas (`hermes_*`, `pending_bot_replies`, `knowledge_base`, etc.) — essas têm
+  migration local confiável.
+- **Skills relacionadas:** SKL-0001 (Supabase), SKL-0005 (Frontend)
+- **Referências:** sessão de 2026-08-27; ver também `PROJECT_CONTEXT.md` Pendência #0
+  (branch `main` divergente) e riscos de `README.md`/`DOCUMENTATION/` desatualizados —
+  mesmo padrão de "documentação/histórico não bate com a realidade do banco".
+- **Confiança:** Alta (confirmado direto na fonte, não inferido)
+
+### LES-0022 — Kanban de Tarefas deixa arrastar card pra qualquer coluna, mas o banco só aceita transição de 1 etapa — erro cai em silêncio
+- **Status:** Resolvida
+- **Tipo:** Erro
+- **Severidade:** Média (não corrompe dado — a trigger do banco protege a
+  integridade — mas gera confusão real de UX: o usuário arrasta, o card
+  "não vai", e nada explica por quê)
+- **Área/módulo:** `src/pages/ProjectsPage.tsx` (`moveToStatus`,
+  `handleColumnDrop`), `src/hooks/useOperations.ts` (`updateStatus`),
+  trigger `trg_operations_status_step` / função
+  `enforce_operation_status_step()` no Postgres.
+- **Primeira ocorrência:** não determinada (o Kanban de 5 colunas e a
+  trigger provavelmente coexistem desde a criação de ambos); descoberta
+  nesta sessão, 2026-08-27, ao ler a definição da trigger pra escrever a
+  migration de baseline do LES-0021.
+- **Última validação:** 2026-08-27 (lida a definição da trigger e o código
+  do Kanban; **não reproduzido via UI real nesta sessão** — achado por
+  leitura de código, não por teste ponta a ponta).
+- **Sintoma esperado:** arrastar um card de uma coluna do Kanban pra outra
+  que não seja imediatamente adjacente (ex: de "Nova tarefa" direto pra
+  "Concluído") não move o card e não mostra nenhum erro/toast — o
+  `dragOverStatus`/`draggingId` resetam e a tela volta ao estado anterior
+  como se nada tivesse acontecido.
+- **Causa raiz:** duas peças que não se falam. (1) No banco, a trigger
+  `enforce_operation_status_step` (`BEFORE UPDATE OF status ON
+  operations`) rejeita qualquer transição cujo `abs(novo_índice -
+  índice_antigo) <> 1` na ordem `NEW/IN_PROGRESS/APPROVAL/REVISION/DONE`,
+  levantando exceção. (2) No frontend, `ProjectsPage` renderiza as 5
+  colunas via `OPERATION_STATUS_ORDER.map(...)` e `handleColumnDrop` chama
+  `moveToStatus(operationId, status)` pra QUALQUER coluna solta, sem checar
+  adjacência antes. `moveToStatus` chama `updateStatus` (em
+  `useOperations.ts`), que devolve `{ error: error?.message ?? null }` —
+  mas `moveToStatus` nunca lê esse retorno, só reseta `movingId`. O erro
+  do Postgres chega até o cliente Supabase e é descartado ali mesmo.
+- **Impacto real:** indeterminado — não confirmado se algum usuário real já
+  bateu nisso (arrastar 2+ colunas de distância é um gesto plausível num
+  Kanban de 5 colunas lado a lado). Sem registro de reclamação do dono
+  sobre isso até esta data.
+- **Tentativas que falharam:** nenhuma tentativa de correção nesta sessão —
+  achado fora do escopo combinado com o usuário (que pediu só a migration
+  de baseline); registrado pra decisão explícita antes de mexer.
+- **Solução aplicada (2026-08-29):** implementadas as duas frentes previstas.
+  (a) `isAdjacentStatus()` novo em `ProjectsPage.tsx` espelha a regra exata
+  da trigger (inclusive `DONE` terminal); `handleColumnDragOver` calcula se
+  a coluna sob o cursor é válida pro card sendo arrastado e pinta a coluna
+  de vermelho (`dropEffect: 'none'`) quando não é; `moveToStatus` recusa
+  ANTES de chamar `updateStatus` se não for adjacente, com mensagem clara.
+  (b) Toda chamada a `updateStatus` (`moveToStatus`, `advance`, `revert`)
+  agora lê o `{ error }` de retorno e mostra num banner dispensável no topo
+  da página (`moveError`) em vez de descartar.
+- **Validação da solução:** `npm run build`/`tsc` limpos; não reproduzido
+  via UI real (sem sessão de navegador nesta rodada) — a lógica espelha
+  exatamente a trigger já confirmada por leitura direta do banco.
+- **Regra preventiva:** ao adicionar/alterar uma trigger de banco que
+  restringe transições de estado, sempre conferir se alguma UI de
+  drag-and-drop/edição livre no frontend pode gerar uma transição inválida
+  — e, se puder, ou trava no frontend antes de mandar pro banco, ou mostra
+  o erro que volta. Nunca `await` uma chamada que devolve `{ error }` sem
+  checar o campo.
+- **Quando esta regra se aplica:** qualquer tela com Kanban/drag-and-drop
+  ou edição de status livre sobre uma tabela com trigger de transição
+  restrita no banco.
+- **Skills relacionadas:** SKL-0001 (Supabase/Postgres), SKL-0005
+  (Frontend)
+- **Referências:** sessão de 2026-08-27; migration
+  `20260827190000_baseline_operation_status_pipeline.sql` (documenta a
+  trigger); commit `d08b8c0`.
+- **Confiança:** Alta na causa raiz (lida direto no código-fonte e na
+  definição da trigger); Média no impacto real em produção (não
+  reproduzido via UI, não confirmado se já afetou o dono/equipe).
+
+### LES-0023 — `inferSegment()` do Tettolino só detecta 1 segmento de compliance por cliente, mesmo quando o cliente tem mais de um perfil sensível
+- **Status:** Vigente
+- **Tipo:** Erro
+- **Severidade:** Média-Alta (risco de compliance real — TSE/OAB/ANVISA — não é bug
+  visível no dia a dia, só aparece quando o conteúdo errado passa sem handoff)
+- **Área/módulo:** `supabase/functions/agent-whatsapp/index.ts`, função `inferSegment()`
+  (~linha 3165) e `needsHandoff()`
+- **Primeira ocorrência:** código pré-existente; descoberto nesta sessão, 2026-08-29, ao
+  cadastrar o cliente Vagner Miranda (advogado E pré-candidato a prefeito).
+- **Sintoma:** `inferSegment()` roda 3 `if` sequenciais sobre o texto da memória do
+  cliente (`oab|jurídic|advogad` → `legal`; `anvisa|estética|saúde|clínica` →
+  `health_aesthetics`; `eleição|tse|candidat` → `electoral`) e retorna no primeiro match.
+  Um cliente cujo perfil bate em mais de uma categoria (ex: advogado que também é
+  candidato) só é classificado na primeira que aparecer no código — `legal` sempre vence
+  de `electoral` nesse caso, porque é checado antes.
+- **Impacto:** se esse cliente (ou alguém na conversa dele) mandar mensagem com conteúdo
+  de propaganda eleitoral, o handoff de compliance eleitoral (TSE) **não dispara** — só
+  dispararia o de aconselhamento jurídico específico (OAB), que é um padrão de texto
+  diferente.
+- **Causa raiz:** `inferSegment()` modela compliance como categoria única
+  (`'legal' | 'health_aesthetics' | 'electoral' | 'general'`) quando na prática um
+  cliente pode acumular mais de um perfil sensível ao mesmo tempo.
+- **Solução aplicada (2026-08-29, mesma sessão):** `inferSegment()` → `inferSegments()`
+  (retorna array com TODOS os segmentos batidos, não só o primeiro);
+  `needsHandoff()`/`evaluateHandoff()` conferem os 3 padrões contra cada segmento
+  presente no array, não contra 1 só. Corrigido nos 3 lugares que replicam a lógica:
+  `agent-whatsapp/index.ts` (backend), `src/utils/aiContext.ts` + `compliance.ts`
+  (frontend, usado por `AiPage`/`InboxPage` via `aiReply.ts`). Testes novos em
+  `aiContext.test.ts`/`compliance.test.ts` cobrindo perfil duplo (27 testes passando).
+  Deploy do backend (`agent-whatsapp`) delegado a subagente com verificação byte a byte
+  em andamento no momento desta escrita — confirmar resultado antes de marcar esta
+  lição como `Resolvida` de fato.
+- **Regra preventiva:** ao cadastrar cliente com mais de um perfil regulado
+  (jurídico+eleitoral, saúde+eleitoral, etc.), saber que o handoff automático só cobre
+  o primeiro que bater. Corrigir isso propriamente exigiria `needsHandoff` rodar os 3
+  conjuntos de padrão sempre, não só o do segmento "vencedor" de `inferSegment`.
+- **Quando esta regra se aplica:** qualquer cliente com perfil múltiplo (ex: médico que
+  também é candidato, advogado que também atua em estética).
+- **Skills relacionadas:** SKL-0004 (Tettolino/Hermes)
+- **Referências:** sessão de 2026-08-29, cliente Vagner Miranda.
+- **Confiança:** Alta (lido direto no código-fonte).
+
+### LES-0024 — Cadastro em massa de clientes/contratos: 3 armadilhas reais encontradas
+- **Status:** Vigente
+- **Tipo:** Aprendizado
+- **Severidade:** Média
+- **Área/módulo:** `client_contracts` (trigger `generate_contract_financial_entries`),
+  `files.client_id` (FK), fluxo de criação de cliente novo no CRM.
+- **Primeira ocorrência:** 2026-08-29, ao recadastrar os 21+1 clientes reais da agência.
+- **Sintoma 1:** o texto completo de `client_contracts.service_description` é copiado
+  literalmente pra dentro da `description` de CADA parcela gerada em
+  `financial_entries` (`COALESCE(service_description, title) || ' — parcela X/Y'`). Se
+  `service_description` tiver o texto integral de uma cláusula contratual, todas as 12
+  parcelas ficam com um parágrafo inteiro de texto jurídico como "descrição", ilegível
+  numa lista de Financeiro.
+- **Solução aplicada 1:** manter `service_description` curto (1 linha, resumo do
+  pacote de serviço); guardar o texto jurídico completo como entrada em
+  `client_ai_memory` (categoria `BRIEFING`) — separa "resumo operacional" de "cláusula
+  legal completa", e ainda alimenta o contexto do Tettolino/bot de cliente.
+- **Sintoma 2:** `files.client_id` referencia `clients(id)` **sem `ON DELETE CASCADE`**
+  (diferente de `client_contacts`, `conversations`, `client_contracts`,
+  `financial_entries`, que têm cascade). Tentar apagar um cliente com qualquer arquivo
+  anexado (mesmo um marcador de pasta vazia criado no onboarding) falha com
+  `foreign key constraint "files_client_id_fkey"`.
+- **Solução aplicada 2:** antes de apagar um cliente, checar
+  `select count(*) from files where client_id = X` — se houver arquivo real (não só
+  marcador de pasta), realocar (`UPDATE files SET client_id = <cliente certo>`) pro
+  cliente correto em vez de perder o anexo; se for só o marcador vazio de onboarding,
+  apagar a linha de `files` antes do cliente.
+- **Sintoma 3:** ao pedir pra "apagar os clientes que não estão na lista", uma checagem
+  rápida revelou que 5 dos "descartáveis" tinham conversa real de WhatsApp com histórico
+  (incluindo 2 que eram, na verdade, os donos de clientes ativos da lista — descoberto só
+  ao cruzar telefone/contexto, não pelo nome). Apagar sem checar teria perdido histórico
+  de conversa real e/ou duplicado contato de cliente ativo.
+- **Solução aplicada 3:** antes de qualquer exclusão em lote de cliente, cruzar
+  `client_contacts`/`conversations`/`client_ai_memory` de cada candidato — nome parecido
+  ou telefone batendo com um cliente da lista "oficial" é sinal de que não é lixo, é
+  duplicidade a **mesclar/renomear**, não apagar.
+- **Regra preventiva:** em qualquer exclusão de cliente, rodar um checklist fixo antes:
+  (1) `files` sem cascade — realocar ou limpar; (2) cruzar telefone/nome contra a lista
+  oficial de clientes antes de assumir "é lixo"; (3) migrations de `apply_migration` são
+  transacionais — se uma parte falhar (ex: FK), a transação inteira reverte, incluindo
+  passos anteriores que pareciam ter funcionado (ex: `UPDATE` de realocação de arquivo
+  dentro da mesma chamada que depois falhou no `DELETE`) — reaplicar tudo junto, não só a
+  parte que faltou.
+- **Quando esta regra se aplica:** qualquer limpeza/consolidação de cadastro de cliente
+  neste CRM.
+- **Skills relacionadas:** SKL-0001 (Supabase)
+- **Referências:** sessão de 2026-08-29 — migrations
+  `reassign_files_and_delete_off_list_clients_2026_08_29`,
+  `fix_am_consultoria_contract_description`.
+- **Confiança:** Alta.
+
+### LES-0025 — Corrigir `agent-whatsapp` quebrado via `deploy_edge_function` (MCP) falha por limite de tokens de SAÍDA do agente, não por erro no conteúdo — LES-0001 sozinho não basta pra arquivos grandes
+- **Status:** Vigente — bloqueador ativo, produção ainda quebrada nesta data.
+- **Tipo:** Incidente / Limitação de ferramenta
+- **Severidade:** Crítica
+- **Área/módulo:** `supabase/functions/agent-whatsapp/index.ts` (3778 linhas, ~152KB),
+  deploy via MCP `deploy_edge_function`.
+- **Ambiente:** produção (projeto Supabase `lniinjegcvdcrmsrzqkt`), tentativa de correção
+  do incidente descrito em LES-0001 (v53 quebrado por deploy anterior cortado no meio).
+- **Primeira ocorrência:** 2026-08-29, sessão de correção de emergência (subagente
+  dedicado, seguindo à risca o processo de LES-0001: ler do disco, nunca de memória).
+- **Sintoma:** mesmo lendo o arquivo fresco do disco (confirmado íntegro, md5sum batendo)
+  e tentando colar o conteúdo EXATO no parâmetro `files[0].content` da chamada MCP
+  `deploy_edge_function`, a própria geração da resposta do agente foi cortada pelo limite
+  de tokens de saída ANTES de terminar de escrever o parâmetro — em duas tentativas
+  separadas, parando em ~20-25% do arquivo (linha ~766 e depois ~949 de 3778). Na 2ª
+  tentativa a chamada foi de fato enviada ao Supabase com conteúdo truncado/sintaticamente
+  inválido; o bundler do Supabase (ao contrário do incidente original) REJEITOU o deploy
+  com `BadRequestException` (erro de parser) em vez de aceitar — não criou uma v54 quebrada,
+  mas também não corrigiu nada. `agent-whatsapp` permaneceu em v53.
+- **Contexto:** o parâmetro `content` de `deploy_edge_function` precisa conter o arquivo
+  INTEIRO como texto literal, gerado pelo modelo dentro de uma única chamada de
+  ferramenta — não existe suporte a `file_path`/upload por referência nem a
+  envio incremental/append entre chamadas. Isso significa que o texto completo do arquivo
+  precisa "caber" na saída de UM turno de resposta do agente.
+- **Impacto:** produção do webhook de WhatsApp seguiu quebrada por mais tempo; risco de
+  reproduzir o incidente original (deploy parcial aceito silenciosamente) se o bundler não
+  tivesse rejeitado dessa vez — não é garantido que ele sempre rejeite conteúdo truncado
+  (depende de o corte cair num ponto que quebre a sintaxe de forma detectável).
+- **Causa raiz:** LES-0001 recomendava "delegar a um subagente com instruções explícitas de
+  ler do disco" como mitigação suficiente pra arquivos grandes — mas isso só resolve o
+  problema de FIDELIDADE do conteúdo (não reconstruir de memória/resumir). Não resolve o
+  problema, distinto, de CAPACIDADE: o subagente tem um teto de tokens de saída por turno
+  (nesta sessão, suficiente pra ~900-950 das 3778 linhas, ~25%) que é uma propriedade fixa
+  da infraestrutura do agente, não algo contornável reduzindo texto explicativo, cortando
+  raciocínio, ou tentando de novo (variação entre tentativas não fecha um gap de ~4x).
+- **Tentativas que falharam:** (1) minimizar texto de preâmbulo antes da chamada de
+  ferramenta — ajudou marginalmente (766→949 linhas) mas não resolveu; (2) repetir a mesma
+  chamada esperando variação favorável — não é uma estratégia válida pra um teto estrutural
+  de ~4x o necessário; (3) tentar `supabase` CLI local (que leria o arquivo do disco
+  diretamente, contornando o problema por completo) — instalado (`v2.113.0`) mas sem
+  `SUPABASE_ACCESS_TOKEN`/`supabase login` configurado no ambiente; (4) buscar um token
+  Supabase já disponível no sistema de arquivos — corretamente bloqueado pelo classificador
+  de permissões (busca ampla por `*token*`/`*credential*` no filesystem é o tipo de ação que
+  deve mesmo ser barrada; não deve ser tentada de novo por essa rota).
+- **Solução recomendada (não aplicada ainda — requer ação humana/de outra sessão):**
+  configurar um Supabase Personal Access Token no ambiente (`SUPABASE_ACCESS_TOKEN` de
+  ambiente, ou `supabase login` interativo) e deployar via CLI local
+  (`supabase functions deploy agent-whatsapp --project-ref lniinjegcvdcrmsrzqkt`), que lê o
+  arquivo direto do disco sem exigir que o agente "digite" o conteúdo inteiro numa resposta
+  — elimina o teto de tokens de saída como fator. Depois do deploy por CLI, rodar o mesmo
+  processo de verificação byte a byte de LES-0001 (`get_edge_function` + `diff` + `md5sum`)
+  normalmente, já que essa etapa não depende de geração de texto grande pelo agente.
+- **Regra preventiva:** pra qualquer arquivo de edge function acima de ~1500-2000 linhas
+  (regra de bolso: se não coube inteiro numa única leitura de ~950 linhas por chamada
+  `Read`, é candidato a estourar também a geração de saída), NÃO tentar
+  `deploy_edge_function` via MCP colando o conteúdo inline — usar `supabase` CLI local
+  (requer token configurado) desde a primeira tentativa, não como último recurso depois de
+  gastar tentativas na abordagem que não escala.
+- **Quando esta regra se aplica:** deploy de qualquer edge function grande (hoje, só
+  `agent-whatsapp` se aproxima desse tamanho) quando o ambiente tiver a Supabase CLI
+  disponível; se não tiver CLI/token, o bloqueio é genuíno e deve ser reportado como tal
+  ao usuário em vez de insistir na mesma chamada MCP.
+- **Quando não se aplica:** arquivos pequenos/médios (a maioria das outras edge functions
+  do projeto) — `deploy_edge_function` via MCP continua o caminho certo pra esses.
+- **Skills relacionadas:** SKL-0001 (Supabase).
+- **Referências:** sessão de correção de emergência de 2026-08-29, subagente dedicado à
+  correção de LES-0001/v53; `list_edge_functions` confirmando `agent-whatsapp` ainda em
+  v53 após as duas tentativas.
+- **Confiança:** Alta.
+
+### LES-0026 — VPS: Postgres/Redis do projeto "petitfour" acessíveis pela internet inteira, apesar do `ufw` mostrar firewall restrito — Docker bypassa `ufw` via chain `FORWARD`
+- **Status:** Resolvida
+- **Tipo:** Incidente de segurança
+- **Severidade:** Crítica
+- **Área/módulo:** infraestrutura da VPS (`srv1885087`, IP `179.198.113.246`) — não é
+  código deste repositório, mas roda no mesmo servidor que hospeda o CRM/Evolution API.
+  Achado durante uma auditoria geral pedida pelo dono ("iremos estudar minha vps").
+- **Sintoma:** `docker ps` revelou um projeto Docker Compose não documentado, chamado
+  "petitfour" (frontend + backend + Postgres 16 + Redis 7 — aparentemente um sistema à
+  parte pro cliente Petit Four, não relacionado ao código deste repo), publicando as
+  portas 3000/3333/5432/6379 no host (`0.0.0.0:PORTA->container`). `ufw status` mostrava
+  só 22/80/443/3000/3333 como liberados — sugerindo que 5432 (Postgres) e 6379 (Redis)
+  estariam bloqueados por padrão (`deny incoming`). Na prática, NÃO estavam: confirmado
+  lendo as regras reais do `iptables` (`iptables -t nat -L DOCKER` + `iptables -L DOCKER
+  -n`), que mostravam regras `DNAT`+`ACCEPT` explícitas redirecionando qualquer origem
+  (`0.0.0.0/0`) da porta pública 5432/6379 pro IP interno do container correspondente.
+- **Causa raiz:** Docker publica portas de container via NAT (`DNAT` na chain
+  `PREROUTING`) + `ACCEPT` nas chains `DOCKER`/`DOCKER-FORWARD`, que rodam dentro da chain
+  `FORWARD` do kernel — **não** da chain `INPUT`, que é a única que o `ufw` filtra por
+  padrão. Como o `DNAT` reescreve o IP de destino ANTES da decisão de roteamento, o pacote
+  deixa de ser "pra esse host" (INPUT) e passa a ser "encaminhado" (FORWARD) pro container —
+  path que o `ufw status`/regras normais do `ufw` simplesmente não cobrem. Isso é uma
+  armadilha conhecida (não específica deste projeto) de qualquer VPS rodando Docker +
+  `ufw` juntos: publicar uma porta de container (`ports:` no compose) torna essa porta
+  acessível da internet **independente** do que o `ufw` mostra, a menos que se use o ponto
+  de customização oficial do Docker pra isso.
+- **Impacto:** Postgres e Redis de um sistema de produção de um cliente real ficaram
+  acessíveis por qualquer IP da internet por tempo indeterminado (containers up há 2
+  semanas na hora do achado) — sem confirmação de credenciais fracas/fortes (não
+  testado, por escolha deliberada: inspecionar `iptables` é auditoria de rede, tentar
+  logar no banco seria testar exploração, fora do escopo pedido).
+- **Solução aplicada (2026-09-14):** duas camadas.
+  1. Regras `iptables -I DOCKER-USER -i eth0 -p tcp -d 172.20.0.0/16 --dport {5432,6379}
+     -j DROP` — `DOCKER-USER` é a chain que o próprio Docker garante nunca sobrescrever,
+     avaliada ANTES de `DOCKER-FORWARD`; `-d 172.20.0.0/16` (sub-rede do
+     `petitfour_default`, via `docker network inspect`) em vez do IP exato de cada
+     container, pra sobreviver a uma recriação dos containers com IP interno diferente.
+     Aplicadas na hora, sem downtime nem reiniciar containers — confirmado que o acesso
+     via `localhost:5432` (necessário pro próprio container/app) continua funcionando,
+     porque esse caminho é `INPUT`/loopback, não passa por `DOCKER-USER`.
+  2. Persistência: script idempotente em `/usr/local/sbin/docker-user-firewall.sh` +
+     serviço systemd `docker-user-firewall.service` (`After=docker.service`,
+     `WantedBy=multi-user.target`) reaplicando as mesmas regras a cada boot. **Não** foi
+     usado `/etc/ufw/after.rules` (caminho "oficial" mais comum pra esse tipo de fix)
+     porque a chain `DOCKER-USER` só existe depois que o `docker.service` sobe, e a ordem
+     de boot entre `ufw.service` e `docker.service` não é garantida — um `-A DOCKER-USER
+     ...` no `after.rules` rodando antes do Docker existir quebraria o `ufw reload`
+     inteiro. Um serviço systemd com `After=docker.service` explícito evita essa corrida.
+- **Validação da solução:** regra confirmada na chain (`iptables -L DOCKER-USER -n -v`);
+  containers `petitfour-*` seguem `Up`/`healthy` depois da mudança; `localhost:5432`
+  segue alcançável do próprio host; serviço systemd habilitado e testado
+  (`systemctl enable --now`, status `active (exited)`, idempotente — reexecução não
+  duplica regra, checado via `iptables -C` antes de inserir).
+- **Ainda pendente (fora do escopo desta correção):** (a) `PROJECT_CONTEXT.md` não
+  documentava o projeto "petitfour" nenhuma vez — auditar o que é esse sistema, quem
+  mantém, e se pertence à TettoHub ou é um serviço white-label pro cliente; (b) não
+  confirmado se as credenciais do Postgres/Redis expostos são fracas (recomendação: trocar
+  a senha por precaução, já que ficaram expostas por tempo indeterminado, mesmo com o
+  bloqueio de rede agora em vigor); (c) mesma checagem (`iptables -t nat -L DOCKER`) vale a
+  pena repetir pra Evolution API e qualquer container Docker futuro que publique porta —
+  hoje só Evolution/Postgres/Redis do Evolution não têm porta de banco publicada
+  (verificado, ok), mas não há garantia de que isso se mantenha em containers futuros.
+- **Regra preventiva:** em qualquer VPS com Docker + `ufw`, `ufw status` **não** é fonte de
+  verdade sobre o que está de fato acessível da internet pra portas publicadas por
+  container (`ports:` no compose/`docker run -p`) — sempre conferir
+  `iptables -t nat -L DOCKER -n` e `iptables -L DOCKER -n` (ou `DOCKER-FORWARD`) também.
+  Container que não precisa ser acessado de fora (banco, cache, serviço interno) não
+  deveria nem publicar a porta no host (`ports:` no compose) — o ideal é resolver via rede
+  interna do Docker (nome do serviço), com `DOCKER-USER` como cinto de segurança adicional,
+  não como única camada.
+- **Referências:** auditoria geral da VPS pedida pelo dono ("iremos estudar minha vps"),
+  2026-09-14; `docker ps`, `iptables -t nat -L DOCKER`, `iptables -L DOCKER-FORWARD -n -v`,
+  `docker network inspect petitfour_default`.
+- **Confiança:** Alta (confirmado lendo as regras reais do `iptables`, não inferido).
+
+## Registro rápido durante a tarefa
+
+Nenhuma lição em status `Em investigação` no momento desta linha de base.
+
+## Aprendizados positivos
+
+- **Processo de deploy com verificação byte a byte (LES-0001)** — usado consistentemente
+  desde sua adoção, zero incidentes de deploy quebrado no restante desta sessão. Marcar como
+  `Solução comprovada`.
+- **Teste com fato propositalmente inventado** (ex: "37 dias e meio" pra validar
+  `search_knowledge_base`) — método eficaz pra provar que uma resposta vem de fato de uma
+  busca/fonte de dados, e não de o modelo "chutar" algo plausível. Reutilizável pra validar
+  qualquer feature de RAG/busca. Marcar como `Solução comprovada`.
+- **Simular webhook real via `curl` direto no endpoint da edge function** (em vez de só
+  revisão de código) pra validar lógica de grupo/detecção — usado com sucesso nos testes de
+  `INTERNAL_GROUP_JIDS`, `fromMe`, `search_team`, `search_knowledge`. Marcar como `Solução
+  comprovada`.

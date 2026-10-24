@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { FormEvent } from 'react'
 import { Link, useParams } from 'react-router-dom'
+import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/contexts/AuthContext'
 import { useClientBriefing } from '@/hooks/useClientBriefing'
 import { useDriveUpload } from '@/hooks/useDriveUpload'
@@ -11,13 +12,16 @@ import { DriveDropzone } from '@/components/files/DriveDropzone'
 import {
   CLIENT_STATUS_LABELS,
   OPERATION_STATUS_ORDER,
+  PIPELINE_STAGE_LABELS,
   canEditBriefing,
   canUploadRecordings,
+  canViewAllClients,
+  canViewFinance,
 } from '@/utils/permissions'
 import { buildDriveFolderName } from '@/utils/driveFolder'
-import type { BriefingFormData, ContractPeriodicity } from '@/types/database'
+import type { BriefingFormData, Client, ContractPeriodicity } from '@/types/database'
 
-type Tab = 'briefing' | 'gravacoes' | 'contrato' | 'visualizacao'
+type Tab = 'briefing' | 'gravacoes' | 'contrato' | 'visualizacao' | 'analise'
 
 function formHasContent(form: BriefingFormData) {
   return Object.values(form).some((v) => String(v).trim().length > 0)
@@ -54,6 +58,10 @@ export function ClientBriefingPage() {
 
   const canEdit = canEditBriefing(role ?? undefined)
   const canUpload = canUploadRecordings(role ?? undefined)
+  // Contrato é dado financeiro — Funcionário nunca vê essa aba, nem o botão
+  // nem o conteúdo, mesmo que o estado `tab` de algum jeito fique 'contrato'
+  // (ver reorganização de hierarquia: Operação x Gerência x Administrativa).
+  const canSeeContract = canViewFinance(role ?? undefined)
 
   const folderPreview = useMemo(
     () => buildDriveFolderName(client?.name ?? 'Cliente', shootDate),
@@ -117,6 +125,15 @@ export function ClientBriefingPage() {
     )
   }
 
+  // Prospect (funil de Prospecção, ainda não convertido em cliente — ver
+  // pipeline_stage) usa uma página inteiramente diferente: não é um cliente
+  // fechado, então não faz sentido mostrar Briefing/Gravações/Contrato como
+  // se já tivesse um. Mostra só o que ajuda a decidir se vale a pena
+  // converter (presença digital, dono, resumo da oportunidade).
+  if (client.pipeline_stage !== 'WON') {
+    return <ProspectProfilePage client={client} onUpdated={refresh} />
+  }
+
   return (
     <div>
       <header className="mb-4 sm:mb-6">
@@ -163,17 +180,19 @@ export function ClientBriefingPage() {
         >
           Gravações
         </button>
-        <button
-          type="button"
-          onClick={() => setTab('contrato')}
-          className={`min-h-11 flex-1 rounded-lg px-4 py-2.5 text-sm sm:flex-none ${
-            tab === 'contrato'
-              ? 'bg-emerald-500/20 font-medium text-emerald-300'
-              : 'bg-slate-900 text-slate-400'
-          }`}
-        >
-          Contrato
-        </button>
+        {canSeeContract && (
+          <button
+            type="button"
+            onClick={() => setTab('contrato')}
+            className={`min-h-11 flex-1 rounded-lg px-4 py-2.5 text-sm sm:flex-none ${
+              tab === 'contrato'
+                ? 'bg-emerald-500/20 font-medium text-emerald-300'
+                : 'bg-slate-900 text-slate-400'
+            }`}
+          >
+            Contrato
+          </button>
+        )}
         <button
           type="button"
           onClick={() => setTab('visualizacao')}
@@ -184,6 +203,17 @@ export function ClientBriefingPage() {
           }`}
         >
           Visualização
+        </button>
+        <button
+          type="button"
+          onClick={() => setTab('analise')}
+          className={`min-h-11 flex-1 rounded-lg px-4 py-2.5 text-sm sm:flex-none ${
+            tab === 'analise'
+              ? 'bg-emerald-500/20 font-medium text-emerald-300'
+              : 'bg-slate-900 text-slate-400'
+          }`}
+        >
+          Análise
         </button>
       </div>
 
@@ -443,7 +473,7 @@ export function ClientBriefingPage() {
         </div>
       )}
 
-      {tab === 'contrato' && <ContractsTab clientId={clientId} canEdit={canEdit} />}
+      {tab === 'contrato' && canSeeContract && <ContractsTab clientId={clientId} canEdit={canEdit} />}
 
       {tab === 'visualizacao' && (
         <VisualizacaoTab
@@ -452,6 +482,466 @@ export function ClientBriefingPage() {
           clientStatus={client?.status}
           logoUrl={form.logo_url}
         />
+      )}
+
+      {tab === 'analise' && <AnaliseTab clientId={clientId} client={client} />}
+    </div>
+  )
+}
+
+function DigitalStatusBadge({
+  label,
+  known,
+  active,
+}: {
+  label: string
+  known: boolean | null
+  active?: boolean | null
+}) {
+  let tone = 'bg-slate-800 text-slate-400'
+  let text = 'Não verificado'
+  if (known === true) {
+    if (active === false) {
+      tone = 'bg-amber-500/15 text-amber-300'
+      text = 'Tem, mas desatualizado'
+    } else {
+      tone = 'bg-emerald-500/15 text-emerald-300'
+      text = 'Ativo'
+    }
+  } else if (known === false) {
+    tone = 'bg-red-500/15 text-red-300'
+    text = 'Não tem'
+  }
+  return (
+    <div className="rounded-lg border border-slate-800 bg-slate-900/50 p-3">
+      <p className="text-xs text-slate-500">{label}</p>
+      <span className={`mt-1 inline-block rounded-full px-2 py-0.5 text-xs ${tone}`}>{text}</span>
+    </div>
+  )
+}
+
+const ANALYSIS_MEMORY_TITLE = 'Análise — Oportunidade TettoHub'
+
+/**
+ * Página inteira exibida ao clicar num prospect (pipeline_stage !== 'WON') —
+ * substitui completamente a UI de cliente fechado (Briefing/Gravações/
+ * Contrato) por algo focado em decisão de funil de vendas: presença
+ * digital, dono/responsável, e resumo do que a TettoHub pode oferecer.
+ * Editável por quem opera o funil (mesmos papéis do board de Prospecção).
+ */
+function ProspectProfilePage({
+  client,
+  onUpdated,
+}: {
+  client: Client
+  onUpdated: () => void
+}) {
+  const { role } = useAuth()
+  const canEdit = canViewAllClients(role ?? undefined)
+
+  const [editing, setEditing] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [saveError, setSaveError] = useState<string | null>(null)
+  const [savedMsg, setSavedMsg] = useState<string | null>(null)
+
+  const [contactName, setContactName] = useState(client.contact_name ?? '')
+  const [segment, setSegment] = useState(client.segment ?? '')
+  const [city, setCity] = useState(client.city ?? '')
+  const [state, setState] = useState(client.state ?? '')
+  const [cpfCnpj, setCpfCnpj] = useState(client.cpf_cnpj ?? '')
+  const [notes, setNotes] = useState(client.notes ?? '')
+  const [hasInstagram, setHasInstagram] = useState<boolean | null>(client.has_instagram)
+  const [instagramHandle, setInstagramHandle] = useState(client.instagram_handle ?? '')
+  const [instagramActive, setInstagramActive] = useState<boolean | null>(client.instagram_active)
+  const [hasWebsite, setHasWebsite] = useState<boolean | null>(client.has_website)
+  const [websiteUrl, setWebsiteUrl] = useState(client.website_url ?? '')
+  const [runsAds, setRunsAds] = useState<boolean | null>(client.runs_ads)
+  const [analysis, setAnalysis] = useState('')
+  const [loadingAnalysis, setLoadingAnalysis] = useState(true)
+
+  useEffect(() => {
+    let cancelled = false
+    setLoadingAnalysis(true)
+    supabase
+      .from('client_ai_memory')
+      .select('content')
+      .eq('client_id', client.id)
+      .eq('title', ANALYSIS_MEMORY_TITLE)
+      .maybeSingle()
+      .then(({ data }) => {
+        if (!cancelled) {
+          setAnalysis(data?.content ?? '')
+          setLoadingAnalysis(false)
+        }
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [client.id])
+
+  const resetFromClient = () => {
+    setContactName(client.contact_name ?? '')
+    setSegment(client.segment ?? '')
+    setCity(client.city ?? '')
+    setState(client.state ?? '')
+    setCpfCnpj(client.cpf_cnpj ?? '')
+    setNotes(client.notes ?? '')
+    setHasInstagram(client.has_instagram)
+    setInstagramHandle(client.instagram_handle ?? '')
+    setInstagramActive(client.instagram_active)
+    setHasWebsite(client.has_website)
+    setWebsiteUrl(client.website_url ?? '')
+    setRunsAds(client.runs_ads)
+  }
+
+  const handleSave = async () => {
+    setSaving(true)
+    setSaveError(null)
+    const { error: clientErr } = await supabase
+      .from('clients')
+      .update({
+        contact_name: contactName.trim() || null,
+        segment: segment.trim() || null,
+        city: city.trim() || null,
+        state: state.trim() || null,
+        cpf_cnpj: cpfCnpj.trim() || null,
+        notes: notes.trim() || null,
+        has_instagram: hasInstagram,
+        instagram_handle: instagramHandle.trim() || null,
+        instagram_active: instagramActive,
+        has_website: hasWebsite,
+        website_url: websiteUrl.trim() || null,
+        runs_ads: runsAds,
+        digital_checked_at: new Date().toISOString(),
+      })
+      .eq('id', client.id)
+
+    if (clientErr) {
+      setSaveError(clientErr.message)
+      setSaving(false)
+      return
+    }
+
+    const { data: existingMemory } = await supabase
+      .from('client_ai_memory')
+      .select('id')
+      .eq('client_id', client.id)
+      .eq('title', ANALYSIS_MEMORY_TITLE)
+      .maybeSingle()
+
+    if (existingMemory) {
+      await supabase
+        .from('client_ai_memory')
+        .update({ content: analysis })
+        .eq('id', existingMemory.id)
+    } else if (analysis.trim()) {
+      await supabase.from('client_ai_memory').insert({
+        workspace_id: client.workspace_id,
+        client_id: client.id,
+        category: 'INSIGHTS',
+        title: ANALYSIS_MEMORY_TITLE,
+        content: analysis,
+        importance: 6,
+        active: true,
+      })
+    }
+
+    setSaving(false)
+    setSavedMsg('Análise salva.')
+    setEditing(false)
+    onUpdated()
+  }
+
+  const three = (value: boolean | null, onChange: (v: boolean | null) => void, labels: [string, string]) => (
+    <div className="flex gap-1.5">
+      {(['sim', 'nao'] as const).map((opt) => {
+        const active = opt === 'sim' ? value === true : value === false
+        return (
+          <button
+            key={opt}
+            type="button"
+            onClick={() => onChange(opt === 'sim' ? true : false)}
+            className={`min-h-9 rounded-lg border px-3 text-xs ${
+              active
+                ? opt === 'sim'
+                  ? 'border-emerald-600/60 bg-emerald-500/15 text-emerald-300'
+                  : 'border-red-600/60 bg-red-500/15 text-red-300'
+                : 'border-slate-700 text-slate-500 hover:bg-slate-900'
+            }`}
+          >
+            {opt === 'sim' ? labels[0] : labels[1]}
+          </button>
+        )
+      })}
+    </div>
+  )
+
+  return (
+    <div>
+      <header className="mb-4 sm:mb-6">
+        <Link
+          to="/prospeccao"
+          className="inline-flex min-h-10 items-center text-sm text-slate-500 hover:text-emerald-400"
+        >
+          ← Prospecção
+        </Link>
+        <div className="mt-2 flex flex-wrap items-center gap-2">
+          <h2 className="text-xl font-bold break-words sm:text-2xl">{client.name}</h2>
+          <span className="rounded-full bg-violet-500/15 px-2 py-0.5 text-xs text-violet-300">
+            {client.pipeline_stage === 'LOST'
+              ? 'Perdido'
+              : (PIPELINE_STAGE_LABELS[client.pipeline_stage] ?? client.pipeline_stage)}
+          </span>
+        </div>
+        <p className="mt-1 text-sm text-slate-400">
+          Prospect — ainda não é cliente fechado. Essas informações ajudam a decidir se
+          vale investir no funil de vendas.
+        </p>
+      </header>
+
+      {(saveError || savedMsg) && (
+        <p
+          className={`mb-4 rounded-lg px-3 py-2 text-sm ${
+            saveError ? 'bg-red-500/10 text-red-400' : 'bg-emerald-500/10 text-emerald-300'
+          }`}
+        >
+          {saveError || savedMsg}
+        </p>
+      )}
+
+      {canEdit && (
+        <div className="mb-4 flex justify-end gap-2">
+          {editing ? (
+            <>
+              <button
+                type="button"
+                onClick={() => {
+                  resetFromClient()
+                  setEditing(false)
+                }}
+                disabled={saving}
+                className="min-h-10 rounded-lg border border-slate-700 px-4 text-sm text-slate-300 hover:bg-slate-900 disabled:opacity-50"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={handleSave}
+                disabled={saving}
+                className="min-h-10 rounded-lg bg-emerald-600 px-4 text-sm font-medium hover:bg-emerald-500 disabled:opacity-50"
+              >
+                {saving ? 'Salvando...' : 'Salvar'}
+              </button>
+            </>
+          ) : (
+            <button
+              type="button"
+              onClick={() => {
+                setSavedMsg(null)
+                setEditing(true)
+              }}
+              className="min-h-10 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-4 text-sm font-medium text-emerald-300 hover:bg-emerald-500/20"
+            >
+              Editar
+            </button>
+          )}
+        </div>
+      )}
+
+      <div className="space-y-4">
+        <section className="rounded-xl border border-slate-800 bg-slate-900/40 p-4 sm:p-5">
+          <h3 className="mb-3 font-semibold text-slate-300">Dados da empresa</h3>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <LockedField label="Dono / responsável" value={contactName} editing={editing} onChange={setContactName} />
+            <LockedField label="Ramo de atividade" value={segment} editing={editing} onChange={setSegment} />
+            <LockedField label="Cidade" value={city} editing={editing} onChange={setCity} />
+            <LockedField label="Estado" value={state} editing={editing} onChange={setState} />
+            <LockedField label="CNPJ/CPF" value={cpfCnpj} editing={editing} onChange={setCpfCnpj} />
+          </div>
+          <div className="mt-3">
+            <LockedTextArea label="Observações" value={notes} editing={editing} onChange={setNotes} rows={4} />
+          </div>
+        </section>
+
+        <section className="rounded-xl border border-slate-800 bg-slate-900/40 p-4 sm:p-5">
+          <h3 className="mb-3 font-semibold text-slate-300">Presença digital</h3>
+          <div className="space-y-4">
+            <div>
+              <p className="mb-1.5 text-xs text-slate-500">Instagram</p>
+              {editing ? (
+                <div className="space-y-2">
+                  {three(hasInstagram, setHasInstagram, ['Tem', 'Não tem'])}
+                  {hasInstagram && (
+                    <>
+                      <input
+                        placeholder="@usuario"
+                        value={instagramHandle}
+                        onChange={(e) => setInstagramHandle(e.target.value)}
+                        className="w-full min-h-10 rounded-lg border border-slate-700 bg-slate-950 px-3 text-sm"
+                      />
+                      <div className="flex items-center gap-2 text-xs text-slate-500">
+                        <span>Ativo/atualizado?</span>
+                        {three(instagramActive, setInstagramActive, ['Sim', 'Não'])}
+                      </div>
+                    </>
+                  )}
+                </div>
+              ) : (
+                <DigitalStatusBadge
+                  label={client.instagram_handle ? `@${client.instagram_handle.replace(/^@/, '')}` : 'Instagram'}
+                  known={client.has_instagram}
+                  active={client.instagram_active}
+                />
+              )}
+            </div>
+
+            <div>
+              <p className="mb-1.5 text-xs text-slate-500">Site</p>
+              {editing ? (
+                <div className="space-y-2">
+                  {three(hasWebsite, setHasWebsite, ['Tem', 'Não tem'])}
+                  {hasWebsite && (
+                    <input
+                      placeholder="https://..."
+                      value={websiteUrl}
+                      onChange={(e) => setWebsiteUrl(e.target.value)}
+                      className="w-full min-h-10 rounded-lg border border-slate-700 bg-slate-950 px-3 text-sm"
+                    />
+                  )}
+                </div>
+              ) : (
+                <>
+                  <DigitalStatusBadge label="Site" known={client.has_website} />
+                  {client.website_url && (
+                    <a
+                      href={client.website_url}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="mt-1.5 block text-xs text-emerald-400 hover:underline"
+                    >
+                      {client.website_url}
+                    </a>
+                  )}
+                </>
+              )}
+            </div>
+
+            <div>
+              <p className="mb-1.5 text-xs text-slate-500">Anúncios pagos</p>
+              {editing ? (
+                three(runsAds, setRunsAds, ['Roda', 'Não roda'])
+              ) : (
+                <DigitalStatusBadge label="Anúncios pagos" known={client.runs_ads} />
+              )}
+            </div>
+          </div>
+          {client.digital_checked_at && (
+            <p className="mt-4 text-xs text-slate-600">
+              Última verificação: {new Date(client.digital_checked_at).toLocaleDateString('pt-BR')}
+            </p>
+          )}
+        </section>
+
+        <section className="rounded-xl border border-slate-800 bg-slate-900/40 p-4 sm:p-5">
+          <h3 className="mb-3 font-semibold text-slate-300">Resumo e oportunidade TettoHub</h3>
+          {editing ? (
+            <textarea
+              value={analysis}
+              onChange={(e) => setAnalysis(e.target.value)}
+              rows={6}
+              placeholder="O que a empresa tem hoje, o que falta, e o que a TettoHub pode oferecer..."
+              className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm"
+            />
+          ) : loadingAnalysis ? (
+            <p className="text-sm text-slate-500">Carregando...</p>
+          ) : analysis ? (
+            <p className="whitespace-pre-line text-sm text-slate-300">{analysis}</p>
+          ) : (
+            <p className="text-sm text-slate-500">Ainda não tem análise registrada pra esse prospect.</p>
+          )}
+        </section>
+      </div>
+    </div>
+  )
+}
+
+function AnaliseTab({
+  clientId,
+  client,
+}: {
+  clientId: string | undefined
+  client: import('@/types/database').Client | null
+}) {
+  const [analysis, setAnalysis] = useState<string | null>(null)
+  const [loadingAnalysis, setLoadingAnalysis] = useState(true)
+
+  useEffect(() => {
+    if (!clientId) return
+    let cancelled = false
+    setLoadingAnalysis(true)
+    supabase
+      .from('client_ai_memory')
+      .select('content')
+      .eq('client_id', clientId)
+      .eq('title', 'Análise — Oportunidade TettoHub')
+      .maybeSingle()
+      .then(({ data }) => {
+        if (!cancelled) {
+          setAnalysis(data?.content ?? null)
+          setLoadingAnalysis(false)
+        }
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [clientId])
+
+  if (!client) return null
+
+  return (
+    <div className="space-y-4">
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+        <DigitalStatusBadge
+          label={client.instagram_handle ? `Instagram (${client.instagram_handle})` : 'Instagram'}
+          known={client.has_instagram}
+          active={client.instagram_active}
+        />
+        <DigitalStatusBadge label="Site" known={client.has_website} />
+        <DigitalStatusBadge label="Anúncios pagos" known={client.runs_ads} />
+      </div>
+
+      {client.website_url && (
+        <p className="text-sm text-slate-400">
+          Site:{' '}
+          <a
+            href={client.website_url}
+            target="_blank"
+            rel="noreferrer"
+            className="text-emerald-400 hover:underline"
+          >
+            {client.website_url}
+          </a>
+        </p>
+      )}
+
+      <section className="rounded-xl border border-slate-800 bg-slate-900/40 p-4 sm:p-5">
+        <h3 className="mb-3 font-semibold text-slate-300">Resumo e oportunidade TettoHub</h3>
+        {loadingAnalysis ? (
+          <p className="text-sm text-slate-500">Carregando...</p>
+        ) : analysis ? (
+          <p className="whitespace-pre-line text-sm text-slate-300">{analysis}</p>
+        ) : (
+          <p className="text-sm text-slate-500">
+            Ainda não tem análise registrada pra esse cliente/prospect.
+          </p>
+        )}
+      </section>
+
+      {client.digital_checked_at && (
+        <p className="text-xs text-slate-600">
+          Última verificação de presença digital:{' '}
+          {new Date(client.digital_checked_at).toLocaleDateString('pt-BR')}
+        </p>
       )}
     </div>
   )
@@ -505,9 +995,9 @@ function VisualizacaoTab({
               </span>
             </div>
             <div className="mt-2 grid grid-cols-2 gap-1 text-xs text-slate-500">
-              <span>{counts.DRAFT ?? 0} rascunho</span>
-              <span>{counts.REVIEW ?? 0} em revisão</span>
-              <span>{(counts.APPROVED ?? 0) + (counts.PUBLISHED ?? 0)} aprovados</span>
+              <span>{counts.NEW ?? 0} novas</span>
+              <span>{counts.IN_PROGRESS ?? 0} em criação</span>
+              <span>{(counts.APPROVAL ?? 0) + (counts.REVISION ?? 0)} em aprovação/revisão</span>
               <span>{counts.DONE ?? 0} concluídos</span>
             </div>
           </div>

@@ -55,7 +55,7 @@ export function useDashboardStats() {
         .from('operations')
         .select('id', { count: 'exact', head: true })
         .eq('workspace_id', workspace.id)
-        .eq('status', 'REVIEW'),
+        .eq('status', 'APPROVAL'),
       supabase
         .from('operations')
         .select('id', { count: 'exact', head: true })

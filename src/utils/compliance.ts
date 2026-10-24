@@ -31,13 +31,18 @@ export interface HandoffResult {
   intentClass: string
 }
 
+/**
+ * Checa handoff pra cada segmento que o cliente tem (não só o primeiro) —
+ * um cliente com perfil duplo (ex: jurídico + eleitoral) precisa acionar
+ * ambas as regras, não só uma. Ver PROJECT_LESSONS.md LES-0023.
+ */
 export function evaluateHandoff(
-  segment: ClientSegment,
+  segments: ClientSegment[],
   message: string,
 ): HandoffResult {
   const text = message.trim()
 
-  if (segment === 'legal' && LEGAL_PATTERNS.some((p) => p.test(text))) {
+  if (segments.includes('legal') && LEGAL_PATTERNS.some((p) => p.test(text))) {
     return {
       required: true,
       reason: 'Aconselhamento jurídico específico — escalado para humano (OAB)',
@@ -46,7 +51,7 @@ export function evaluateHandoff(
   }
 
   if (
-    segment === 'health_aesthetics' &&
+    segments.includes('health_aesthetics') &&
     HEALTH_PATTERNS.some((p) => p.test(text))
   ) {
     return {
@@ -57,7 +62,7 @@ export function evaluateHandoff(
   }
 
   if (
-    segment === 'electoral' &&
+    segments.includes('electoral') &&
     ELECTORAL_PATTERNS.some((p) => p.test(text))
   ) {
     return {

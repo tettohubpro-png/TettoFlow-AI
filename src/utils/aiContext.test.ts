@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildAiContext, inferSegment, searchRelevantMemories } from './aiContext'
+import { buildAiContext, inferSegments, searchRelevantMemories } from './aiContext'
 import type { ClientAiMemory } from '@/types/database'
 
 const memories: ClientAiMemory[] = [
@@ -41,7 +41,7 @@ describe('aiContext', () => {
     const { context, snippets } = buildAiContext(
       'AM Consultoria',
       memories,
-      [{ title: 'Post Instagram', status: 'PRODUCTION' }],
+      [{ title: 'Post Instagram', status: 'IN_PROGRESS' }],
       'identidade',
     )
     expect(context).toContain('AM Consultoria')
@@ -56,6 +56,16 @@ describe('aiContext', () => {
         content: 'Escritório de advocacia OAB Maranhão',
       },
     ]
-    expect(inferSegment(legal)).toBe('legal')
+    expect(inferSegments(legal)).toEqual(['legal'])
+  })
+
+  it('infere múltiplos segmentos quando o cliente tem mais de um perfil (LES-0023)', () => {
+    const dual: ClientAiMemory[] = [
+      {
+        ...memories[0],
+        content: 'Advogado e pré-candidato a prefeito, campanha e eleição',
+      },
+    ]
+    expect(inferSegments(dual)).toEqual(['legal', 'electoral'])
   })
 })

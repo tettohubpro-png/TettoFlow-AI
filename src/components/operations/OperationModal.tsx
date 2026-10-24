@@ -150,14 +150,14 @@ export function OperationModal({
           <div className="mb-4 flex items-start justify-between gap-3">
             <div className="flex-1">
               {mode === 'create' && (
-                <p className="mb-1 text-xs uppercase tracking-wide text-slate-500">Solicitação</p>
+                <p className="mb-1 text-xs uppercase tracking-wide text-slate-500">Nova tarefa</p>
               )}
               <input
                 id="operation-modal-title"
                 required
                 value={form.title}
                 onChange={(e) => setForm({ ...form, title: e.target.value })}
-                placeholder="Título da solicitação"
+                placeholder="Título da tarefa"
                 className="w-full border-0 bg-transparent text-lg font-semibold text-white placeholder:text-slate-500 focus:outline-none focus:ring-0 sm:text-xl"
               />
             </div>
@@ -518,7 +518,7 @@ export function OperationModal({
               disabled={saving}
               className="min-h-11 flex-1 rounded-lg bg-emerald-600 py-2.5 text-sm font-medium hover:bg-emerald-500 disabled:opacity-50"
             >
-              {saving ? 'Salvando...' : mode === 'create' ? 'Criar solicitação' : 'Salvar alterações'}
+              {saving ? 'Salvando...' : mode === 'create' ? 'Criar tarefa' : 'Salvar alterações'}
             </button>
             <button
               type="button"

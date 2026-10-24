@@ -2,15 +2,26 @@
 
 export type MembershipRole = 'OWNER' | 'ADMIN' | 'MANAGER' | 'MEMBER' | 'CLIENT'
 export type ClientStatus = 'ACTIVE' | 'INACTIVE' | 'ARCHIVED'
+export type ClientType = 'CLIENT' | 'PARTNER'
+/** Funil de prospecção: Prospecção → Contatado → Interessado → Proposta Enviada → Convertido, com Perdido em paralelo */
+export type ClientPipelineStage =
+  | 'PROSPECT'
+  | 'CONTACTED'
+  | 'INTERESTED'
+  | 'PROPOSAL_SENT'
+  | 'WON'
+  | 'LOST'
+export type ClientLostReason =
+  | 'NO_INTEREST'
+  | 'HAS_AGENCY'
+  | 'NO_BUDGET'
+  | 'NO_RESPONSE'
+  | 'OTHER'
 export type OperationStatus =
-  | 'DRAFT'
-  | 'SUBMITTED'
-  | 'ANALYSIS'
-  | 'PRODUCTION'
-  | 'REVIEW'
-  | 'CLIENT'
-  | 'APPROVED'
-  | 'PUBLISHED'
+  | 'NEW'
+  | 'IN_PROGRESS'
+  | 'APPROVAL'
+  | 'REVISION'
   | 'DONE'
 export type OperationPriority = 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL'
 /** Segmento regulatório para compliance de IA (WhatsApp) */
@@ -23,6 +34,7 @@ export interface AppUser {
   name: string
   email: string
   avatar_url: string | null
+  whatsapp_phone?: string | null
   must_change_password?: boolean
   access_status?: AccessStatus
   auth_provider?: string | null
@@ -58,6 +70,7 @@ export type JobRole =
   | 'photographer'
   | 'video_editor'
   | 'traffic'
+  | 'drone_pilot'
 
 export interface ClientSocialLinks {
   instagram?: string
@@ -72,13 +85,27 @@ export interface Client {
   workspace_id: string
   name: string
   status: ClientStatus
+  client_type: ClientType
+  pipeline_stage: ClientPipelineStage
+  lost_reason: ClientLostReason | null
+  next_follow_up_date: string | null
+  prospected_by: string | null
+  prospected_at: string
   segment: string | null
   cpf_cnpj: string | null
   city: string | null
   state: string | null
   origin: string | null
   notes: string | null
+  contact_name: string | null
   social_links: ClientSocialLinks
+  has_instagram: boolean | null
+  instagram_handle: string | null
+  instagram_active: boolean | null
+  has_website: boolean | null
+  website_url: string | null
+  runs_ads: boolean | null
+  digital_checked_at: string | null
   created_at: string
   updated_at: string
   archived_at: string | null
@@ -385,6 +412,32 @@ export interface ClientAiMemory {
   updated_at: string
 }
 
+export type KnowledgeCategory =
+  | 'POLICY'
+  | 'PRICING'
+  | 'PROCEDURE'
+  | 'FAQ'
+  | 'SERVICE'
+  | 'BRAND'
+  | 'GENERAL'
+
+export type KnowledgeAudience = 'hermes' | 'clients' | 'both'
+
+export interface KnowledgeBaseEntry {
+  id: string
+  workspace_id: string
+  title: string
+  content: string
+  category: KnowledgeCategory
+  tags: string[]
+  audience: KnowledgeAudience
+  importance: number
+  active: boolean
+  created_by: string | null
+  created_at: string
+  updated_at: string
+}
+
 export interface AiChatMessage {
   role: 'user' | 'assistant'
   content: string
@@ -424,7 +477,8 @@ export type MessageDirection = 'inbound' | 'outbound'
 export interface Conversation {
   id: string
   workspace_id: string
-  client_id: string
+  client_id: string | null
+  kind: 'client' | 'internal' | 'unknown'
   channel: ConversationChannel
   contact_phone: string | null
   contact_name: string | null
@@ -440,7 +494,7 @@ export interface ConversationMessage {
   id: string
   workspace_id: string
   conversation_id: string
-  client_id: string
+  client_id: string | null
   direction: MessageDirection
   content: string
   is_ai: boolean

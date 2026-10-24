@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react'
 import type { DragEvent } from 'react'
-import { useSearchParams, Link } from 'react-router-dom'
-import { LayoutGrid, Table2 } from 'lucide-react'
+import { useSearchParams } from 'react-router-dom'
+import { LayoutGrid, Table2, CalendarDays, Download, Pencil } from 'lucide-react'
 import { OperationCard } from '@/components/operations/OperationCard'
 import { OperationModal } from '@/components/operations/OperationModal'
+import { PostCalendar } from '@/components/dashboard/PostCalendar'
 import { useOperations, type OperationDetails } from '@/hooks/useOperations'
 import { useClients } from '@/hooks/useClients'
 import { useApprovals } from '@/hooks/useApprovals'
@@ -18,21 +19,18 @@ import {
   nextOperationStatus,
   previousOperationStatus,
 } from '@/utils/permissions'
+import { downloadClientFile, openClientFile } from '@/utils/fileView'
 import type { OperationFormData } from '@/utils/operationExtras'
-import type { Operation, OperationStatus } from '@/types/database'
+import type { ClientFile, Operation, OperationStatus } from '@/types/database'
 
-type ViewMode = 'kanban' | 'tabela'
+type ViewMode = 'kanban' | 'tabela' | 'calendario'
 
 const STATUS_DOT: Record<OperationStatus, string> = {
-  DRAFT: 'bg-slate-500',
-  SUBMITTED: 'bg-sky-400',
-  ANALYSIS: 'bg-sky-400',
-  PRODUCTION: 'bg-amber-400',
-  REVIEW: 'bg-amber-400',
-  CLIENT: 'bg-violet-400',
-  APPROVED: 'bg-emerald-400',
-  PUBLISHED: 'bg-emerald-400',
-  DONE: 'bg-slate-600',
+  NEW: 'bg-slate-500',
+  IN_PROGRESS: 'bg-amber-400',
+  APPROVAL: 'bg-violet-400',
+  REVISION: 'bg-sky-400',
+  DONE: 'bg-emerald-400',
 }
 
 export function ProjectsPage() {
@@ -65,6 +63,10 @@ export function ProjectsPage() {
   const [viewMode, setViewMode] = useState<ViewMode>('kanban')
   const [clientFilter, setClientFilter] = useState('')
   const [searchParams, setSearchParams] = useSearchParams()
+  const [selectedCalendarOp, setSelectedCalendarOp] = useState<OperationDetails | null>(null)
+  const [calendarError, setCalendarError] = useState<string | null>(null)
+  const [busyFileId, setBusyFileId] = useState<string | null>(null)
+  const [moveError, setMoveError] = useState<string | null>(null)
 
   const filteredOperations = clientFilter
     ? operations.filter((op) => op.client_id === clientFilter)
@@ -90,6 +92,9 @@ export function ProjectsPage() {
       const attach = await attachFiles(editingDetails.id, editingDetails.client_id, files)
       if (attach.error) return attach
     }
+    if (selectedCalendarOp?.id === editingDetails.id) {
+      setSelectedCalendarOp(await loadOperationDetails(editingDetails.id))
+    }
     return { error: null }
   }
 
@@ -101,6 +106,28 @@ export function ProjectsPage() {
       setEditingDetails(details)
       setEditOpen(true)
     }
+  }
+
+  const openCalendarDetails = async (op: Operation) => {
+    setCalendarError(null)
+    const details = await loadOperationDetails(op.id)
+    setSelectedCalendarOp(details)
+  }
+
+  const handleOpenFile = async (file: ClientFile) => {
+    setBusyFileId(file.id)
+    setCalendarError(null)
+    const result = await openClientFile(file)
+    if (result.error) setCalendarError(result.error)
+    setBusyFileId(null)
+  }
+
+  const handleDownloadFile = async (file: ClientFile) => {
+    setBusyFileId(file.id)
+    setCalendarError(null)
+    const result = await downloadClientFile(file)
+    if (result.error) setCalendarError(result.error)
+    setBusyFileId(null)
   }
 
   useEffect(() => {
@@ -118,27 +145,54 @@ export function ProjectsPage() {
   const advance = async (operationId: string, current: OperationStatus) => {
     const next = nextOperationStatus(current) as OperationStatus | null
     if (!next) return
-    await updateStatus(operationId, next)
+    const { error } = await updateStatus(operationId, next)
+    if (error) setMoveError(error)
   }
 
   const revert = async (operationId: string, current: OperationStatus) => {
     const prev = previousOperationStatus(current) as OperationStatus | null
     if (!prev) return
-    await updateStatus(operationId, prev)
+    const { error } = await updateStatus(operationId, prev)
+    if (error) setMoveError(error)
+  }
+
+  // Espelha a trigger enforce_operation_status_step do Postgres: só deixa
+  // mover 1 etapa por vez (pra frente ou pra trás); DONE é terminal. Ver
+  // PROJECT_LESSONS.md LES-0022 — antes disso o Kanban deixava soltar em
+  // qualquer coluna e o erro do banco era descartado em silêncio.
+  const isAdjacentStatus = (from: OperationStatus, to: OperationStatus) => {
+    if (from === to) return true
+    if (from === 'DONE') return false
+    const fromIdx = OPERATION_STATUS_ORDER.indexOf(from)
+    const toIdx = OPERATION_STATUS_ORDER.indexOf(to)
+    return Math.abs(toIdx - fromIdx) === 1
   }
 
   const moveToStatus = async (operationId: string, toStatus: OperationStatus) => {
     if (!canOperate) return
     const op = operations.find((o) => o.id === operationId)
     if (!op || op.status === toStatus) return
+
+    if (!isAdjacentStatus(op.status, toStatus)) {
+      setMoveError(
+        op.status === 'DONE'
+          ? 'Status "Concluído" é final — não dá pra mover de volta.'
+          : `Não dá pra pular direto de "${OPERATION_STATUS_LABELS[op.status]}" pra "${OPERATION_STATUS_LABELS[toStatus]}" — só uma etapa por vez.`,
+      )
+      return
+    }
+
     setMovingId(operationId)
-    await updateStatus(operationId, toStatus)
+    const { error } = await updateStatus(operationId, toStatus)
     setMovingId(null)
+    if (error) setMoveError(error)
   }
 
   const handleColumnDragOver = (e: DragEvent<HTMLDivElement>, status: string) => {
     e.preventDefault()
-    e.dataTransfer.dropEffect = 'move'
+    const draggingOp = draggingId ? operations.find((o) => o.id === draggingId) : null
+    const allowed = !draggingOp || isAdjacentStatus(draggingOp.status, status as OperationStatus)
+    e.dataTransfer.dropEffect = allowed ? 'move' : 'none'
     if (dragOverStatus !== status) setDragOverStatus(status)
   }
 
@@ -164,14 +218,24 @@ export function ProjectsPage() {
 
   return (
     <div>
+      {moveError && (
+        <div className="mb-3 flex items-center justify-between gap-3 rounded-lg border border-red-800/60 bg-red-950/40 px-3 py-2 text-sm text-red-300">
+          <span>{moveError}</span>
+          <button
+            type="button"
+            onClick={() => setMoveError(null)}
+            className="min-h-8 min-w-8 shrink-0 rounded text-red-400 hover:text-red-200"
+            aria-label="Fechar aviso"
+          >
+            ✕
+          </button>
+        </div>
+      )}
       <header className="mb-4 flex flex-col gap-3 sm:mb-6 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h2 className="text-xl font-bold sm:text-2xl">Tarefas</h2>
           <p className="text-sm text-slate-400">
-            Kanban e tabela do pipeline — calendário editorial fica em{' '}
-            <Link to="/conteudo" className="text-emerald-400 hover:underline">
-              Conteúdo
-            </Link>
+            Kanban, tabela e calendário editorial do pipeline
           </p>
         </div>
         {canOperate && (
@@ -180,7 +244,7 @@ export function ProjectsPage() {
             onClick={() => setCreateOpen(true)}
             className="min-h-11 w-full rounded-lg bg-emerald-600 px-4 py-2.5 text-sm font-medium hover:bg-emerald-500 sm:w-auto"
           >
-            Solicitação
+            Nova tarefa
           </button>
         )}
       </header>
@@ -191,6 +255,7 @@ export function ProjectsPage() {
             [
               { key: 'kanban', label: 'Kanban', icon: LayoutGrid },
               { key: 'tabela', label: 'Tabela', icon: Table2 },
+              { key: 'calendario', label: 'Agenda', icon: CalendarDays },
             ] as const
           ).map(({ key, label, icon: Icon }) => (
             <button
@@ -229,6 +294,18 @@ export function ProjectsPage() {
           members={members}
           onEdit={openEdit}
         />
+      ) : viewMode === 'calendario' ? (
+        <CalendarView
+          operations={filteredOperations}
+          selected={selectedCalendarOp}
+          canOperate={canOperate}
+          busyFileId={busyFileId}
+          error={calendarError}
+          onSelect={openCalendarDetails}
+          onEdit={openEdit}
+          onOpenFile={handleOpenFile}
+          onDownloadFile={handleDownloadFile}
+        />
       ) : (
         <div
           className="-mx-3 flex gap-3 overflow-x-auto px-3 pb-2 sm:mx-0 sm:grid sm:grid-cols-2 sm:overflow-visible sm:px-0 lg:grid-cols-3 xl:grid-cols-5"
@@ -237,7 +314,11 @@ export function ProjectsPage() {
             setDragOverStatus(null)
           }}
         >
-          {byStatus.map(({ status, items }) => (
+          {byStatus.map(({ status, items }) => {
+            const draggingOp = draggingId ? operations.find((o) => o.id === draggingId) : null
+            const dropAllowed = !draggingOp || isAdjacentStatus(draggingOp.status, status)
+            const isOver = dragOverStatus === status
+            return (
             <div
               key={status}
               onDragOver={(e) => handleColumnDragOver(e, status)}
@@ -246,9 +327,11 @@ export function ProjectsPage() {
               }}
               onDrop={(e) => handleColumnDrop(e, status)}
               className={`w-[78vw] max-w-xs shrink-0 rounded-xl border p-3 transition sm:w-auto sm:max-w-none ${
-                dragOverStatus === status
-                  ? 'border-sky-500 bg-sky-950/40 ring-2 ring-sky-500/30'
-                  : 'border-slate-800 bg-slate-900/30'
+                isOver && !dropAllowed
+                  ? 'border-red-500 bg-red-950/20 ring-2 ring-red-500/30'
+                  : isOver
+                    ? 'border-sky-500 bg-sky-950/40 ring-2 ring-sky-500/30'
+                    : 'border-slate-800 bg-slate-900/30'
               }`}
             >
               <h3 className="mb-3 text-xs font-semibold uppercase tracking-wide text-slate-400">
@@ -257,7 +340,7 @@ export function ProjectsPage() {
               <ul className="min-h-16 space-y-2">
                 {items.length === 0 && (
                   <li className="rounded-lg border border-dashed border-slate-700 px-3 py-6 text-center text-xs text-slate-600">
-                    {dragOverStatus === status ? 'Solte aqui' : 'Arraste um card'}
+                    {isOver ? (dropAllowed ? 'Solte aqui' : 'Só 1 etapa por vez') : 'Arraste um card'}
                   </li>
                 )}
                 {items.map((op) => {
@@ -281,7 +364,7 @@ export function ProjectsPage() {
                         loadingEdit === op.id ||
                         movingId === op.id
                       }
-                      canRevert={!!prev && op.status !== 'DRAFT'}
+                      canRevert={!!prev && op.status !== 'NEW'}
                       canAdvance={op.status !== 'DONE'}
                       isDragging={draggingId === op.id}
                       onDragBegin={() => setDraggingId(op.id)}
@@ -291,7 +374,8 @@ export function ProjectsPage() {
                 })}
               </ul>
             </div>
-          ))}
+            )
+          })}
         </div>
       )}
 
@@ -373,6 +457,113 @@ function TableView({
           })}
         </tbody>
       </table>
+    </div>
+  )
+}
+
+function CalendarView({
+  operations,
+  selected,
+  canOperate,
+  busyFileId,
+  error,
+  onSelect,
+  onEdit,
+  onOpenFile,
+  onDownloadFile,
+}: {
+  operations: Operation[]
+  selected: OperationDetails | null
+  canOperate: boolean
+  busyFileId: string | null
+  error: string | null
+  onSelect: (op: Operation) => void
+  onEdit: (operationId: string) => void
+  onOpenFile: (file: ClientFile) => void
+  onDownloadFile: (file: ClientFile) => void
+}) {
+  return (
+    <div className="grid gap-4 lg:grid-cols-[1fr_20rem]">
+      <PostCalendar operations={operations} onSelect={onSelect} selectedId={selected?.id} />
+
+      <aside className="tf-panel h-fit p-4">
+        <h3 className="text-sm font-semibold">Postagem selecionada</h3>
+        {!selected ? (
+          <p className="mt-2 text-xs" style={{ color: 'var(--color-text3)' }}>
+            Selecione um item no calendário para editar a data, baixar o post ou abrir a operação
+            no kanban.
+          </p>
+        ) : (
+          <div className="mt-3 space-y-3">
+            <div>
+              <p className="font-medium">{selected.title}</p>
+              <p className="text-xs" style={{ color: 'var(--color-text3)' }}>
+                {selected.clients?.name ?? 'Sem cliente'}
+                {selected.deadline
+                  ? ` · ${new Date(selected.deadline).toLocaleDateString('pt-BR')}`
+                  : ''}
+              </p>
+            </div>
+
+            {canOperate && (
+              <button
+                type="button"
+                onClick={() => onEdit(selected.id)}
+                className="tf-btn tf-btn-primary inline-flex w-full items-center justify-center gap-1.5 text-sm"
+              >
+                <Pencil size={14} /> Editar postagem / data
+              </button>
+            )}
+
+            <div>
+              <p className="tf-label">Arquivos / posts</p>
+              {selected.files.length === 0 ? (
+                <p className="text-xs" style={{ color: 'var(--color-text3)' }}>
+                  Nenhum anexo. Edite a operação para enviar o arquivo do post.
+                </p>
+              ) : (
+                <ul className="mt-1 space-y-1.5">
+                  {selected.files.map((file) => (
+                    <li
+                      key={file.id}
+                      className="flex items-center justify-between gap-2 rounded-lg border px-2 py-1.5 text-xs"
+                      style={{ borderColor: 'var(--color-border)' }}
+                    >
+                      <span className="truncate">{file.name}</span>
+                      <span className="flex shrink-0 gap-1">
+                        <button
+                          type="button"
+                          disabled={busyFileId === file.id}
+                          onClick={() => onOpenFile(file)}
+                          className="rounded px-1.5 py-0.5 hover:bg-white/5"
+                          title="Abrir"
+                        >
+                          Abrir
+                        </button>
+                        <button
+                          type="button"
+                          disabled={busyFileId === file.id}
+                          onClick={() => onDownloadFile(file)}
+                          className="inline-flex items-center gap-0.5 rounded px-1.5 py-0.5 hover:bg-white/5"
+                          title="Baixar"
+                        >
+                          <Download size={12} />
+                        </button>
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+
+            {error && (
+              <p className="text-xs" style={{ color: 'var(--color-danger)' }}>
+                {error}
+              </p>
+            )}
+          </div>
+        )}
+      </aside>
     </div>
   )
 }

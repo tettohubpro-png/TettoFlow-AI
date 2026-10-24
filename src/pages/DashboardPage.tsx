@@ -1,19 +1,32 @@
 import { Link } from 'react-router-dom'
 import { StatCard } from '@/components/ui/StatCard'
 import { PostCalendar } from '@/components/dashboard/PostCalendar'
+import { EmployeeDashboard } from '@/components/dashboard/EmployeeDashboard'
+import { useAuth } from '@/contexts/AuthContext'
 import { useDashboardStats } from '@/hooks/useDashboard'
 import { useOperations } from '@/hooks/useOperations'
-import { OPERATION_STATUS_LABELS, OPERATION_STATUS_ORDER } from '@/utils/permissions'
+import { OPERATION_STATUS_LABELS, OPERATION_STATUS_ORDER, isEmployee } from '@/utils/permissions'
 
 function formatBRL(value: number) {
   return value.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })
 }
 
 export function DashboardPage() {
+  const { role } = useAuth()
+
+  // Operação (Funcionário) tem um dashboard inteiramente à parte — nunca
+  // mostra financeiro/leads/agência inteira, só as próprias demandas. Ver
+  // reorganização de hierarquia (Operação/Gerência/Administrativa).
+  if (isEmployee(role)) return <EmployeeDashboard />
+
+  return <MasterOrManagerDashboard />
+}
+
+function MasterOrManagerDashboard() {
   const { stats, loading } = useDashboardStats()
   const { operations } = useOperations()
 
-  const pendingReviews = operations.filter((op) => op.status === 'REVIEW')
+  const pendingReviews = operations.filter((op) => op.status === 'APPROVAL')
   const today = new Date().toISOString().slice(0, 10)
   const todayOps = operations.filter(
     (op) => op.deadline && op.deadline.startsWith(today),
